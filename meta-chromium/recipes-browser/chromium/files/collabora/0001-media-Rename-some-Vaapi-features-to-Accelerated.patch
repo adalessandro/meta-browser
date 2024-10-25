@@ -1,0 +1,295 @@
+From 1769b94f582da89a498fd2cfb919788eb7950afb Mon Sep 17 00:00:00 2001
+From: Robert Mader <robert.mader@collabora.com>
+Date: Wed, 2 Oct 2024 19:21:17 +0000
+Subject: [PATCH 01/14] media: Rename some 'Vaapi' features to 'Accelerated'
+
+In preparation of patches that will allow V4L2 decoding to work by
+default on Linux.
+
+The VA-API and V4L2 backends provide essenitaly the same output -
+DMABufs in formats like NV12/P010 etc. - and face similar restrictions
+e.g. GL driver features. It therefore makes sense to have the same media
+switches and in fact some of them - most importantly
+`VaapiVideoDecodeLinux` - already apply to V4L2.
+
+Thus in order to reduce confusion and avoid code duplication, rename
+some of the `Vaapi` swiches used in common code to `Accelerated` but
+keep the `Linux` suffix, making it clearer to what they apply. Also
+ensure they are used for both APIs the same way and update the
+`vaapi.md`.
+
+Finally, add `AcceleratedVideoDecodeLinuxZeroCopyGL` to the VA-API
+documentation.
+
+Bug: b:334110478
+Change-Id: Iea58966d6ab94ce995defb1cf1099dd9ba9fae26
+Reviewed-on: https://chromium-review.googlesource.com/c/chromium/src/+/5893615
+Reviewed-by: Sean Topping <seantopping@chromium.org>
+Reviewed-by: Kentaro Hara <haraken@chromium.org>
+Reviewed-by: Fritz Koenig <frkoenig@chromium.org>
+Commit-Queue: Fritz Koenig <frkoenig@chromium.org>
+Cr-Commit-Position: refs/heads/main@{#1363231}
+---
+ .../browser/cast_content_browser_client.cc    |  8 ++++----
+ content/browser/gpu/compositor_util.cc        |  4 ++--
+ content/renderer/render_thread_impl.cc        |  4 ++--
+ docs/gpu/vaapi.md                             |  9 ++++++---
+ media/base/media_switches.cc                  | 16 ++++++++--------
+ media/base/media_switches.h                   |  6 +++---
+ .../gpu_video_encode_accelerator_factory.cc   |  9 ++++++++-
+ .../video_encoder_test_environment.cc         |  2 +-
+ .../services/gpu_mojo_media_client_linux.cc   | 19 +++++++++++++------
+ 9 files changed, 47 insertions(+), 30 deletions(-)
+
+diff --git a/chromecast/browser/cast_content_browser_client.cc b/chromecast/browser/cast_content_browser_client.cc
+index 3604d1af6f..20c86c1d3a 100644
+--- a/chromecast/browser/cast_content_browser_client.cc
++++ b/chromecast/browser/cast_content_browser_client.cc
+@@ -150,11 +150,11 @@ CastContentBrowserClient::CastContentBrowserClient(
+           std::make_unique<CastNetworkContexts>(GetCorsExemptHeadersList())),
+       cast_feature_list_creator_(cast_feature_list_creator) {
+   std::vector<const base::Feature*> extra_enable_features = {
+-    &::media::kInternalMediaSession,
+-    &features::kNetworkServiceInProcess,
++      &::media::kInternalMediaSession,
++      &features::kNetworkServiceInProcess,
+ #if BUILDFLAG(USE_V4L2_CODEC)
+-    // Enable accelerated video decode if v4l2 codec is supported.
+-    &::media::kVaapiVideoDecodeLinux,
++      // Enable accelerated video decode if v4l2 codec is supported.
++      &::media::kAcceleratedVideoDecodeLinux,
+ #endif  // BUILDFLAG(USE_V4L2_CODEC)
+   };
+ 
+diff --git a/content/browser/gpu/compositor_util.cc b/content/browser/gpu/compositor_util.cc
+index 39dea78b46..b80fbacd4d 100644
+--- a/content/browser/gpu/compositor_util.cc
++++ b/content/browser/gpu/compositor_util.cc
+@@ -154,7 +154,7 @@ std::vector<GpuFeatureData> GetGpuFeatureData(
+       SafeGetFeatureStatus(
+           gpu_feature_info, gpu::GPU_FEATURE_TYPE_ACCELERATED_VIDEO_DECODE,
+ #if BUILDFLAG(IS_LINUX)
+-          !base::FeatureList::IsEnabled(media::kVaapiVideoDecodeLinux) ||
++          !base::FeatureList::IsEnabled(media::kAcceleratedVideoDecodeLinux) ||
+ #endif  // BUILDFLAG(IS_LINUX)
+               command_line.HasSwitch(switches::kDisableAcceleratedVideoDecode)),
+       DisableInfo::Problem(
+@@ -166,7 +166,7 @@ std::vector<GpuFeatureData> GetGpuFeatureData(
+       SafeGetFeatureStatus(
+           gpu_feature_info, gpu::GPU_FEATURE_TYPE_ACCELERATED_VIDEO_ENCODE,
+ #if BUILDFLAG(IS_LINUX)
+-          !base::FeatureList::IsEnabled(media::kVaapiVideoEncodeLinux)),
++          !base::FeatureList::IsEnabled(media::kAcceleratedVideoEncodeLinux)),
+ #else
+           command_line.HasSwitch(switches::kDisableAcceleratedVideoEncode)),
+ #endif  // BUILDFLAG(IS_LINUX)
+diff --git a/content/renderer/render_thread_impl.cc b/content/renderer/render_thread_impl.cc
+index 8fbed3f735..0321aa1edd 100644
+--- a/content/renderer/render_thread_impl.cc
++++ b/content/renderer/render_thread_impl.cc
+@@ -1023,7 +1023,7 @@ media::GpuVideoAcceleratorFactories* RenderThreadImpl::GetGpuFactories() {
+ 
+   const bool enable_video_decode_accelerator =
+ #if BUILDFLAG(IS_LINUX)
+-      base::FeatureList::IsEnabled(media::kVaapiVideoDecodeLinux) &&
++      base::FeatureList::IsEnabled(media::kAcceleratedVideoDecodeLinux) &&
+ #endif  // BUILDFLAG(IS_LINUX)
+       !cmd_line->HasSwitch(switches::kDisableAcceleratedVideoDecode) &&
+       (gpu_channel_host->gpu_feature_info()
+@@ -1032,7 +1032,7 @@ media::GpuVideoAcceleratorFactories* RenderThreadImpl::GetGpuFactories() {
+ 
+   const bool enable_video_encode_accelerator =
+ #if BUILDFLAG(IS_LINUX)
+-      base::FeatureList::IsEnabled(media::kVaapiVideoEncodeLinux) &&
++      base::FeatureList::IsEnabled(media::kAcceleratedVideoEncodeLinux) &&
+ #else
+       !cmd_line->HasSwitch(switches::kDisableAcceleratedVideoEncode) &&
+ #endif  // BUILDFLAG(IS_LINUX)
+diff --git a/docs/gpu/vaapi.md b/docs/gpu/vaapi.md
+index 9e36e88279..36e27d2b56 100644
+--- a/docs/gpu/vaapi.md
++++ b/docs/gpu/vaapi.md
+@@ -137,12 +137,15 @@ up, see the [previous section](#verify-driver).
+ The following feature switch controls video encoding (see [media
+ switches](https://source.chromium.org/chromium/chromium/src/+/main:media/base/media_switches.cc)
+ for more details):
+-* `--enable-features=VaapiVideoEncoder`
++* `--enable-features=AcceleratedVideoEncoder`
+ 
+ The following two arguments are optional:
+ * `--ignore-gpu-blocklist`
+ * `--disable-gpu-driver-bug-workaround`
+ 
++The following feature can improve performance when using EGL/Wayland:
++* `--enable-features=AcceleratedVideoDecodeLinuxZeroCopyGL`
++
+ The NVIDIA VaAPI drivers are known to not support Chromium (see
+ [crbug.com/1492880](https://crbug.com/1492880)). This feature switch is
+ provided for developers to test VaAPI drivers on NVIDIA GPUs:
+@@ -152,7 +155,7 @@ provided for developers to test VaAPI drivers on NVIDIA GPUs:
+ 
+ ```shell
+ ./out/gn/chrome --use-gl=angle --use-angle=gl \
+---enable-features=VaapiVideoEncoder,VaapiVideoDecodeLinuxGL,VaapiOnNvidiaGPUs \
++--enable-features=AcceleratedVideoEncoder,AcceleratedVideoDecodeLinuxGL,VaapiOnNvidiaGPUs \
+ --ignore-gpu-blocklist --disable-gpu-driver-bug-workaround
+ ```
+ 
+@@ -160,7 +163,7 @@ provided for developers to test VaAPI drivers on NVIDIA GPUs:
+ 
+ ```shell
+ ./out/gn/chrome --use-gl=angle --use-angle=vulkan \
+---enable-features=VaapiVideoEncoder,VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks,Vulkan,DefaultANGLEVulkan,VulkanFromANGLE \
++--enable-features=AcceleratedVideoEncoder,VaapiOnNvidiaGPUs,VaapiIgnoreDriverChecks,Vulkan,DefaultANGLEVulkan,VulkanFromANGLE \
+ --ignore-gpu-blocklist --disable-gpu-driver-bug-workaround
+ ```
+ 
+diff --git a/media/base/media_switches.cc b/media/base/media_switches.cc
+index 6044d397b9..fc3cf0d4c3 100644
+--- a/media/base/media_switches.cc
++++ b/media/base/media_switches.cc
+@@ -747,18 +747,18 @@ BASE_FEATURE(kUnifiedAutoplay,
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ #if BUILDFLAG(IS_LINUX)
+-// Enable vaapi video decoding on linux. This is already enabled by default on
+-// chromeos, but needs an experiment on linux.
+-BASE_FEATURE(kVaapiVideoDecodeLinux,
+-             "VaapiVideoDecoder",
++// Enable vaapi/v4l2 video decoding on linux. This is already enabled by default
++// on chromeos, but needs an experiment on linux.
++BASE_FEATURE(kAcceleratedVideoDecodeLinux,
++             "AcceleratedVideoDecoder",
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+-BASE_FEATURE(kVaapiVideoDecodeLinuxGL,
+-             "VaapiVideoDecodeLinuxGL",
++BASE_FEATURE(kAcceleratedVideoDecodeLinuxGL,
++             "AcceleratedVideoDecodeLinuxGL",
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+-BASE_FEATURE(kVaapiVideoEncodeLinux,
+-             "VaapiVideoEncoder",
++BASE_FEATURE(kAcceleratedVideoEncodeLinux,
++             "AcceleratedVideoEncoder",
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ // Ignore the non-intel driver blacklist for VaapiVideoDecoder implementations.
+diff --git a/media/base/media_switches.h b/media/base/media_switches.h
+index a00c82e57d..b09752b6ee 100644
+--- a/media/base/media_switches.h
++++ b/media/base/media_switches.h
+@@ -353,9 +353,9 @@ MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseAndroidOverlayForSecureOnly);
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseDecoderStreamForWebRTC);
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kUseFakeDeviceForMediaStream);
+ #if BUILDFLAG(IS_LINUX)
+-MEDIA_EXPORT BASE_DECLARE_FEATURE(kVaapiVideoDecodeLinux);
+-MEDIA_EXPORT BASE_DECLARE_FEATURE(kVaapiVideoDecodeLinuxGL);
+-MEDIA_EXPORT BASE_DECLARE_FEATURE(kVaapiVideoEncodeLinux);
++MEDIA_EXPORT BASE_DECLARE_FEATURE(kAcceleratedVideoDecodeLinux);
++MEDIA_EXPORT BASE_DECLARE_FEATURE(kAcceleratedVideoDecodeLinuxGL);
++MEDIA_EXPORT BASE_DECLARE_FEATURE(kAcceleratedVideoEncodeLinux);
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kVaapiIgnoreDriverChecks);
+ #endif  // BUILDFLAG(IS_LINUX)
+ MEDIA_EXPORT BASE_DECLARE_FEATURE(kVaapiOnNvidiaGPUs);
+diff --git a/media/gpu/gpu_video_encode_accelerator_factory.cc b/media/gpu/gpu_video_encode_accelerator_factory.cc
+index daede9ea37..0345fc65f7 100644
+--- a/media/gpu/gpu_video_encode_accelerator_factory.cc
++++ b/media/gpu/gpu_video_encode_accelerator_factory.cc
+@@ -119,14 +119,21 @@ std::vector<VEAFactoryFunction> GetVEAFactoryFunctions(
+ 
+ #if BUILDFLAG(USE_VAAPI)
+ #if BUILDFLAG(IS_LINUX)
+-  if (base::FeatureList::IsEnabled(kVaapiVideoEncodeLinux))
++  if (base::FeatureList::IsEnabled(kAcceleratedVideoEncodeLinux)) {
+     vea_factory_functions.push_back(base::BindRepeating(&CreateVaapiVEA));
++  }
+ #else
+   vea_factory_functions.push_back(base::BindRepeating(&CreateVaapiVEA));
+ #endif
+ #elif BUILDFLAG(USE_V4L2_CODEC)
++#if BUILDFLAG(IS_LINUX)
++  if (base::FeatureList::IsEnabled(kAcceleratedVideoEncodeLinux)) {
++    vea_factory_functions.push_back(base::BindRepeating(&CreateV4L2VEA));
++  }
++#else
+   vea_factory_functions.push_back(base::BindRepeating(&CreateV4L2VEA));
+ #endif
++#endif
+ 
+ #if BUILDFLAG(IS_ANDROID)
+   vea_factory_functions.push_back(base::BindRepeating(&CreateAndroidVEA));
+diff --git a/media/gpu/test/video_encoder/video_encoder_test_environment.cc b/media/gpu/test/video_encoder/video_encoder_test_environment.cc
+index 690c13c47d..2c2bab7557 100644
+--- a/media/gpu/test/video_encoder/video_encoder_test_environment.cc
++++ b/media/gpu/test/video_encoder/video_encoder_test_environment.cc
+@@ -296,7 +296,7 @@ VideoEncoderTestEnvironment* VideoEncoderTestEnvironment::Create(
+ #endif
+ 
+ #if BUILDFLAG(IS_LINUX) && BUILDFLAG(USE_VAAPI)
+-  combined_enabled_features.push_back(media::kVaapiVideoEncodeLinux);
++  combined_enabled_features.push_back(media::kAcceleratedVideoEncodeLinux);
+ #endif
+ 
+ #if BUILDFLAG(USE_CHROMEOS_MEDIA_ACCELERATION)
+diff --git a/media/mojo/services/gpu_mojo_media_client_linux.cc b/media/mojo/services/gpu_mojo_media_client_linux.cc
+index cd86a3253e..a4fd8f181c 100644
+--- a/media/mojo/services/gpu_mojo_media_client_linux.cc
++++ b/media/mojo/services/gpu_mojo_media_client_linux.cc
+@@ -18,13 +18,13 @@ namespace media {
+ 
+ namespace {
+ 
+-BASE_FEATURE(kVaapiVideoDecodeLinuxZeroCopyGL,
+-             "VaapiVideoDecodeLinuxZeroCopyGL",
++BASE_FEATURE(kAcceleratedVideoDecodeLinuxZeroCopyGL,
++             "AcceleratedVideoDecodeLinuxZeroCopyGL",
+              base::FEATURE_DISABLED_BY_DEFAULT);
+ 
+ VideoDecoderType GetPreferredLinuxDecoderImplementation() {
+   // VaapiVideoDecoder flag is required for VaapiVideoDecoder.
+-  if (!base::FeatureList::IsEnabled(kVaapiVideoDecodeLinux)) {
++  if (!base::FeatureList::IsEnabled(kAcceleratedVideoDecodeLinux)) {
+     return VideoDecoderType::kUnknown;
+   }
+ 
+@@ -59,7 +59,7 @@ std::vector<Fourcc> GetPreferredRenderableFourccs(
+     // Allow zero-copy formats with GL for testing or in controlled
+     // environments.
+     if (gpu_preferences.gr_context_type == gpu::GrContextType::kGL &&
+-        base::FeatureList::IsEnabled(kVaapiVideoDecodeLinuxZeroCopyGL)) {
++        base::FeatureList::IsEnabled(kAcceleratedVideoDecodeLinuxZeroCopyGL)) {
+       renderable_fourccs.emplace_back(Fourcc::NV12);
+       renderable_fourccs.emplace_back(Fourcc::P010);
+     }
+@@ -79,18 +79,25 @@ std::vector<Fourcc> GetPreferredRenderableFourccs(
+ VideoDecoderType GetActualPlatformDecoderImplementation(
+     const gpu::GpuPreferences& gpu_preferences,
+     const gpu::GPUInfo& gpu_info) {
+-  // On linux, Vaapi has GL restrictions.
++  // On linux, Vaapi and V4L2 have GL restrictions.
+   switch (GetPreferredLinuxDecoderImplementation()) {
+     case VideoDecoderType::kUnknown:
+       return VideoDecoderType::kUnknown;
+     case VideoDecoderType::kOutOfProcess:
+       return VideoDecoderType::kOutOfProcess;
+     case VideoDecoderType::kV4L2:
++      if (gpu_preferences.gr_context_type == gpu::GrContextType::kGL) {
++        if (base::FeatureList::IsEnabled(kAcceleratedVideoDecodeLinuxGL)) {
++          return VideoDecoderType::kV4L2;
++        } else {
++          return VideoDecoderType::kUnknown;
++        }
++      }
+       return VideoDecoderType::kV4L2;
+     case VideoDecoderType::kVaapi: {
+       // Allow VaapiVideoDecoder on GL.
+       if (gpu_preferences.gr_context_type == gpu::GrContextType::kGL) {
+-        if (base::FeatureList::IsEnabled(kVaapiVideoDecodeLinuxGL)) {
++        if (base::FeatureList::IsEnabled(kAcceleratedVideoDecodeLinuxGL)) {
+           return VideoDecoderType::kVaapi;
+         } else {
+           return VideoDecoderType::kUnknown;
+-- 
+2.45.2
+

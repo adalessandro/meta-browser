@@ -1,0 +1,49 @@
+From 861ce2b77e19ad50ccb014a0970f04a187f2d4be Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Mon, 7 Oct 2024 12:00:25 +0300
+Subject: [PATCH 11/14] WIP: media/gpu/v4l2: Enable v4l2 HEVC encoding
+
+---
+ media/gpu/v4l2/v4l2_video_encode_accelerator.cc | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/media/gpu/v4l2/v4l2_video_encode_accelerator.cc b/media/gpu/v4l2/v4l2_video_encode_accelerator.cc
+index 0c18896c9c..3603bcaf93 100644
+--- a/media/gpu/v4l2/v4l2_video_encode_accelerator.cc
++++ b/media/gpu/v4l2/v4l2_video_encode_accelerator.cc
+@@ -1976,6 +1976,7 @@ bool V4L2VideoEncodeAccelerator::InitControls(const Config& config) {
+ 
+   // Don't expect other output formats.
+   CHECK(output_format_fourcc_ == V4L2_PIX_FMT_H264 ||
++        output_format_fourcc_ == V4L2_PIX_FMT_HEVC ||
+         output_format_fourcc_ == V4L2_PIX_FMT_VP8);
+ 
+   // Enable frame-level bitrate control. This is the only mandatory control.
+@@ -1996,6 +1997,9 @@ bool V4L2VideoEncodeAccelerator::InitControls(const Config& config) {
+     case V4L2_PIX_FMT_VP8:
+       InitControlsVP8(config);
+       break;
++    case V4L2_PIX_FMT_HEVC:
++      // TODO: Init HEVC controls
++      break;
+     default:
+       NOTREACHED_IN_MIGRATION()
+           << "Unsupported codec " << FourccToString(output_format_fourcc_);
+@@ -2008,7 +2012,13 @@ bool V4L2VideoEncodeAccelerator::InitControls(const Config& config) {
+                        {V4L2ExtCtrl(V4L2_CID_MPEG_VIDEO_MB_RC_ENABLE, 1)});
+ 
+   // - Set GOP length, or default 0 to disable periodic key frames.
+-  device_->SetGOPLength(config.gop_length.value_or(0));
++  // TODO: Some drivers produces invalid encoded output if gop is set too high,
++  // so limit the GOP length until drivers are fixed.
++  if (config.gop_length.value_or(0) > 5000) {
++    device_->SetGOPLength(5000);
++  } else {
++    device_->SetGOPLength(config.gop_length.value_or(0));
++  }
+ 
+   return true;
+ }
+-- 
+2.45.2
+

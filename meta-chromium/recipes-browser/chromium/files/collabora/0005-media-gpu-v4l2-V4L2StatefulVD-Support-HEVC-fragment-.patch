@@ -1,0 +1,377 @@
+From 372fc9f13fad2e91e1ebcec0b260c6d3c7741cb6 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 4 Oct 2024 13:45:37 +0300
+Subject: [PATCH 05/14] media/gpu/v4l2:V4L2StatefulVD: Support HEVC fragment
+ reassembly
+
+In HEVC, like H.264, NAL units can contain fragments of frames/slices,
+but the v4l2 HEVC decoders generally require one access unit per buffer.
+This CL extends the existing frame reassembly infrastructure to also
+support HEVC.
+
+This was tested locally with streams that have multiple VCL NALUs per access
+unit (i.e., they have VCL NALUs with first_slice_segment_in_pic=0), like
+hevc-conformance/CAINIT_G_SHARP_3.bit.
+
+To better test this change video_decode_accelerator_tests was locally
+adapted to not provide full frames to the decoder.
+---
+ media/gpu/v4l2/v4l2_stateful_video_decoder.cc | 204 +++++++++++++++---
+ media/gpu/v4l2/v4l2_stateful_video_decoder.h  |   7 +-
+ 2 files changed, 174 insertions(+), 37 deletions(-)
+
+diff --git a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+index 166b5f4c22..9efc80849e 100644
+--- a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
++++ b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+@@ -30,6 +30,7 @@
+ #include "media/gpu/v4l2/v4l2_queue.h"
+ #include "media/gpu/v4l2/v4l2_utils.h"
+ #include "media/parsers/h264_parser.h"
++#include "media/parsers/h265_parser.h"
+ #include "third_party/abseil-cpp/absl/cleanup/cleanup.h"
+ #include "ui/gfx/geometry/size.h"
+ 
+@@ -182,6 +183,12 @@ scoped_refptr<media::DecoderBuffer> ReassembleFragments(
+   return reassembled_frame;
+ }
+ 
++bool IsFirstSliceSegmentInPic(media::H265NALU& nalu) {
++  // H.265 7.3.6.1: first_slice_segment_in_pic_flag is the first bit of the
++  // NALU data, just after the 2 byte NALU header.
++  return nalu.size > 2 && nalu.data[2] & 0x80;
++}
++
+ }  // namespace
+ 
+ namespace media {
+@@ -190,13 +197,13 @@ namespace media {
+ // Some implementations (Hana MTK8173, but not Trogdor SC7180), don't support
+ // multiple whole frames enqueued in a single OUTPUT queue buffer. This class
+ // helps processing, slicing and gathering DecoderBuffers into full frames.
+-class H264FrameReassembler {
++class FrameReassembler {
+  public:
+-  H264FrameReassembler() = default;
+-  ~H264FrameReassembler() = default;
++  FrameReassembler() = default;
++  virtual ~FrameReassembler() = default;
+   // Not copyable, not movable (move ctors will be implicitly deleted).
+-  H264FrameReassembler(const H264FrameReassembler&) = delete;
+-  H264FrameReassembler& operator=(const H264FrameReassembler&) = delete;
++  FrameReassembler(const FrameReassembler&) = default;
++  FrameReassembler& operator=(const FrameReassembler&) = default;
+ 
+   // This method parses |buffer| and decides whether it's part of a frame, it
+   // marks the beginning of a new frame, it's a full frame itself, or if it
+@@ -216,11 +223,11 @@ class H264FrameReassembler {
+   }
+   bool HasFragments() const { return !frame_fragments_.empty(); }
+ 
+- private:
+-  // Data structure returned by FindH264FrameBoundary().
++ protected:
++  // Data structure returned by FindFrameBoundary().
+   struct FrameBoundaryInfo {
+     // True if the NALU immediately before the boundary is a whole frame, e.g.
+-    // an SPS, PPS, EOSeq or SEIMessage.
++    // for H.264 an SPS, PPS, EOSeq or SEIMessage.
+     bool is_whole_frame;
+     // True if the NALU marks the beginning of a new frame (but itself isn't
+     // necessarily a whole frame, for that see |is_whole_frame|). This implies
+@@ -234,9 +241,22 @@ class H264FrameReassembler {
+   // a FrameBoundaryInfo describing the first |nalu_size| bytes of |data|.
+   //
+   // It is assumed that |data| contains an integer number of NALUs.
+-  std::optional<struct FrameBoundaryInfo> FindH264FrameBoundary(
++  virtual std::optional<struct FrameBoundaryInfo> FindFrameBoundary(
++      const uint8_t* const data,
++      size_t size) = 0;
++
++  std::vector<scoped_refptr<DecoderBuffer>> frame_fragments_;
++};
++
++class H264FrameReassembler : public FrameReassembler {
++ public:
++  H264FrameReassembler() = default;
++  ~H264FrameReassembler() override = default;
++
++ private:
++  std::optional<struct FrameBoundaryInfo> FindFrameBoundary(
+       const uint8_t* const data,
+-      size_t size);
++      size_t size) override;
+ 
+   H264Parser h264_parser_;
+   static constexpr int kInvalidSPS = -1;
+@@ -244,7 +264,20 @@ class H264FrameReassembler {
+   static constexpr int kInvalidPPS = -1;
+   int pps_id_ = kInvalidPPS;
+   std::unique_ptr<H264SliceHeader> previous_slice_header_;
+-  std::vector<scoped_refptr<DecoderBuffer>> frame_fragments_;
++};
++
++class H265FrameReassembler : public FrameReassembler {
++ public:
++  H265FrameReassembler() = default;
++  ~H265FrameReassembler() override = default;
++
++ private:
++  std::optional<struct FrameBoundaryInfo> FindFrameBoundary(
++      const uint8_t* const data,
++      size_t size) override;
++
++  H265Parser h265_parser_;
++  bool frame_has_vcl_nalu_ = false;
+ };
+ 
+ // static
+@@ -398,10 +431,12 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+ 
+   const bool is_h264 =
+       VideoCodecProfileToVideoCodec(config.profile()) == VideoCodec::kH264;
++  const bool is_h265 =
++      VideoCodecProfileToVideoCodec(config.profile()) == VideoCodec::kHEVC;
+   constexpr size_t kNumInputBuffersH264 = 16;
+   constexpr size_t kNumInputBuffersVPx = 2;
+   const auto num_input_buffers =
+-      is_h264 ? kNumInputBuffersH264 : kNumInputBuffersVPx;
++      is_h264 || is_h265 ? kNumInputBuffersH264 : kNumInputBuffersVPx;
+   if (OUTPUT_queue_->AllocateBuffers(num_input_buffers, V4L2_MEMORY_MMAP,
+                                      /*incoherent=*/false) <
+       num_input_buffers) {
+@@ -428,7 +463,9 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+   config_ = config;
+   output_cb_ = std::move(output_cb);
+   if (is_h264) {
+-    h264_frame_reassembler_ = std::make_unique<H264FrameReassembler>();
++    frame_reassembler_ = std::make_unique<H264FrameReassembler>();
++  } else if (is_h265) {
++    frame_reassembler_ = std::make_unique<H265FrameReassembler>();
+   }
+ 
+   std::move(init_cb).Run(DecoderStatus::Codes::kOk);
+@@ -462,10 +499,9 @@ void V4L2StatefulVideoDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
+       return;
+     }
+ 
+-    if (h264_frame_reassembler_ && h264_frame_reassembler_->HasFragments()) {
++    if (frame_reassembler_ && frame_reassembler_->HasFragments()) {
+       decoder_buffer_and_callbacks_.emplace(
+-          h264_frame_reassembler_->AssembleAndFlushFragments(),
+-          base::DoNothing());
++          frame_reassembler_->AssembleAndFlushFragments(), base::DoNothing());
+       TryAndEnqueueOUTPUTQueueBuffers();
+     }
+ 
+@@ -493,9 +529,9 @@ void V4L2StatefulVideoDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
+ 
+   PrintAndTraceQueueStates(FROM_HERE);
+ 
+-  if (VideoCodecProfileToVideoCodec(config_.profile()) == VideoCodec::kH264) {
+-    auto processed_buffer_and_decode_cbs = h264_frame_reassembler_->Process(
+-        std::move(buffer), std::move(decode_cb));
++  if (frame_reassembler_) {
++    auto processed_buffer_and_decode_cbs =
++        frame_reassembler_->Process(std::move(buffer), std::move(decode_cb));
+     // If Process() returns nothing, then it swallowed its arguments and
+     // there's nothing further to do. Otherwise, just treat whatever it
+     // returned as a normal sequence of DecoderBuffer + DecodeCB.
+@@ -505,12 +541,6 @@ void V4L2StatefulVideoDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
+     for (auto& a : processed_buffer_and_decode_cbs) {
+       decoder_buffer_and_callbacks_.push(std::move(a));
+     }
+-
+-  } else if (VideoCodecProfileToVideoCodec(config_.profile()) ==
+-             VideoCodec::kHEVC) {
+-    NOTIMPLEMENTED();
+-    std::move(decode_cb).Run(DecoderStatus::Codes::kUnsupportedCodec);
+-    return;
+   } else {
+     decoder_buffer_and_callbacks_.emplace(std::move(buffer),
+                                           std::move(decode_cb));
+@@ -553,8 +583,17 @@ void V4L2StatefulVideoDecoder::Reset(base::OnceClosure closure) {
+   weak_ptr_factory_for_CAPTURE_availability_.InvalidateWeakPtrs();
+   cancelable_task_tracker_.TryCancelAll();
+ 
+-  if (h264_frame_reassembler_) {
+-    h264_frame_reassembler_ = std::make_unique<H264FrameReassembler>();
++  if (frame_reassembler_) {
++    const bool is_h264 =
++        VideoCodecProfileToVideoCodec(config_.profile()) == VideoCodec::kH264;
++    const bool is_h265 =
++        VideoCodecProfileToVideoCodec(config_.profile()) == VideoCodec::kHEVC;
++    DCHECK(is_h264 || is_h265);
++    if (is_h264) {
++      frame_reassembler_ = std::make_unique<H264FrameReassembler>();
++    } else if (is_h265) {
++      frame_reassembler_ = std::make_unique<H265FrameReassembler>();
++    }
+   }
+ 
+   // Signal any pending work as kAborted.
+@@ -1208,8 +1247,8 @@ int V4L2StatefulVideoDecoder::GetMaxNumDecoderInstances() {
+ }
+ 
+ std::vector<std::pair<scoped_refptr<DecoderBuffer>, VideoDecoder::DecodeCB>>
+-H264FrameReassembler::Process(scoped_refptr<DecoderBuffer> buffer,
+-                              VideoDecoder::DecodeCB decode_cb) {
++FrameReassembler::Process(scoped_refptr<DecoderBuffer> buffer,
++                          VideoDecoder::DecodeCB decode_cb) {
+   std::vector<std::pair<scoped_refptr<DecoderBuffer>, VideoDecoder::DecodeCB>>
+       whole_frames;
+ 
+@@ -1217,7 +1256,7 @@ H264FrameReassembler::Process(scoped_refptr<DecoderBuffer> buffer,
+ 
+   do {
+     const auto nalu_info =
+-        FindH264FrameBoundary(remaining.data(), remaining.size());
++        FindFrameBoundary(remaining.data(), remaining.size());
+     if (!nalu_info.has_value()) {
+       LOG(ERROR) << "Failed parsing H.264 DecoderBuffer";
+       std::move(decode_cb).Run(DecoderStatus::Codes::kFailed);
+@@ -1267,9 +1306,9 @@ H264FrameReassembler::Process(scoped_refptr<DecoderBuffer> buffer,
+   return whole_frames;
+ }
+ 
+-std::optional<struct H264FrameReassembler::FrameBoundaryInfo>
+-H264FrameReassembler::FindH264FrameBoundary(const uint8_t* const data,
+-                                            size_t data_size) {
++std::optional<struct FrameReassembler::FrameBoundaryInfo>
++H264FrameReassembler::FindFrameBoundary(const uint8_t* const data,
++                                        size_t data_size) {
+   h264_parser_.SetStream(data, data_size);
+   while (true) {
+     H264NALU nalu = {};
+@@ -1376,4 +1415,103 @@ H264FrameReassembler::FindH264FrameBoundary(const uint8_t* const data,
+   }
+ }
+ 
++std::optional<struct FrameReassembler::FrameBoundaryInfo>
++H265FrameReassembler::FindFrameBoundary(const uint8_t* const data,
++                                        size_t data_size) {
++  H265NALU nalu = {};
++  h265_parser_.SetStream(data, data_size);
++  H265Parser::Result result = h265_parser_.AdvanceToNextNALU(&nalu);
++  if (result == H265Parser::kInvalidStream ||
++      result == H265Parser::kUnsupportedStream) {
++    LOG(ERROR) << "Could not parse bitstream.";
++    return std::nullopt;
++  }
++  if (result == H265Parser::kEOStream) {
++    // Not an error per se, but strange to run out of data without having
++    // found a new NALU boundary. Pretend it's a frame boundary and move on.
++    return FrameBoundaryInfo{.is_whole_frame = true,
++                             .is_start_of_new_frame = true,
++                             .nalu_size = nalu.size};
++  }
++  DCHECK_EQ(result, H265Parser::kOk);
++
++  static const char* kKnownNALUNames[] = {
++      "TRAIL_N",        "TRAIL_R",     "TSA_N",          "TSA_R",
++      "STSA_N",         "STSA_R",      "RADL_N",         "RADL_R",
++      "RASL_N",         "RASL_R",      "RSV_VCL_N10",    "RSV_VCL_R11",
++      "RSV_VCL_N12",    "RSV_VCL_R13", "RSV_VCL_N14",    "RSV_VCL_R15",
++      "BLA_W_LP",       "BLA_W_RADL",  "BLA_N_LP",       "IDR_W_RADL",
++      "IDR_N_LP",       "CRA_NUT",     "RSV_IRAP_VCL22", "RSV_IRAP_VCL23",
++      "RSV_VCL24",      "RSV_VCL25",   "RSV_VCL26",      "RSV_VCL27",
++      "RSV_VCL28",      "RSV_VCL29",   "RSV_VCL30",      "RSV_VCL31",
++      "VPS_NUT",        "SPS_NUT",     "PPS_NUT",        "AUD_NUT",
++      "EOS_NUT",        "EOB_NUT",     "FD_NUT",         "PREFIX_SEI_NUT",
++      "SUFFIX_SEI_NUT", "RSV_NVCL41",  "RSV_NVCL42",     "RSV_NVCL43",
++      "RSV_NVCL44",     "RSV_NVCL45",  "RSV_NVCL46",     "RSV_NVCL47",
++      "UNSPEC48",       "UNSPEC49",    "UNSPEC50",       "UNSPEC51",
++      "UNSPEC52",       "UNSPEC53",    "UNSPEC54",       "UNSPEC55",
++      "UNSPEC56",       "UNSPEC57",    "UNSPEC58",       "UNSPEC59",
++      "UNSPEC60",       "UNSPEC61",    "UNSPEC62",       "UNSPEC63",
++  };
++  constexpr auto kMaxNALUTypeValue = std::size(kKnownNALUNames);
++  if (base::checked_cast<size_t>(nalu.nal_unit_type) >= kMaxNALUTypeValue) {
++    LOG(ERROR) << "NALU type unknown.";
++    return std::nullopt;
++  }
++
++  CHECK_GE(nalu.data, data);
++  CHECK_LE(nalu.data, data + data_size);
++  const auto nalu_size = nalu.data - data + nalu.size;
++  const bool is_vcl_nalu = (nalu.nal_unit_type >= H265NALU::TRAIL_N &&
++                            nalu.nal_unit_type <= H265NALU::RASL_R) ||
++                           (nalu.nal_unit_type >= H265NALU::BLA_W_LP &&
++                            nalu.nal_unit_type <= H265NALU::CRA_NUT);
++  VLOGF(4) << "H265NALU type " << kKnownNALUNames[nalu.nal_unit_type]
++           << ", NALU size=" << nalu_size
++           << " bytes, payload size=" << nalu.size << " bytes";
++
++  // Determine AU boundary based on ITU T-REC H.265 7.4.2.4.4:
++  // "Let firstBlPicNalUnit be the first VCL NAL unit of a coded picture with
++  // nuh_layer_id equal to 0. The first of any of the following NAL units
++  // preceding firstBlPicNalUnit and succeeding the last VCL NAL unit preceding
++  // firstBlPicNalUnit, if any, specifies the start of a new access unit:
++  const bool is_start_of_new_frame =
++      frame_has_vcl_nalu_ &&
++      (
++          // All following conditions from 7.4.2.4.4 require nuh_layer_id equal
++          // to 0
++          (nalu.nuh_layer_id == 0 &&
++           (
++               // "access unit delimiter, VPS, SPS, PPS NAL unit"
++               (nalu.nal_unit_type >= H265NALU::VPS_NUT &&
++                nalu.nal_unit_type <= H265NALU::AUD_NUT) ||
++               // "Prefix SEI NAL unit"
++               nalu.nal_unit_type == H265NALU::PREFIX_SEI_NUT ||
++               // "NAL units with nal_unit_type in the range of
++               // RSV_NVCL41..RSV_NVCL44"
++               (nalu.nal_unit_type >= H265NALU::RSV_NVCL41 &&
++                nalu.nal_unit_type <= H265NALU::RSV_NVCL44) ||
++               // "NAL units with nal_unit_type in the range of
++               // UNSPEC48..UNSPEC55"
++               (nalu.nal_unit_type >= H265NALU::UNSPEC48 &&
++                nalu.nal_unit_type <= H265NALU::UNSPEC55))) ||
++          // 7.4.2.4.4: "When there is none of the above NAL units preceding
++          // firstBlPicNalUnit and succeeding the last VCL NAL preceding
++          // firstBlPicNalUnit, if any, firstBlPicNalUnit starts a new access
++          // unit." 7.4.2.4.5 "The first VCL NAL unit of the coded picture shall
++          // have first_slice_segment_in_pic_flag equal to 1"
++          (is_vcl_nalu && IsFirstSliceSegmentInPic(nalu)));
++
++  if (is_start_of_new_frame) {
++    frame_has_vcl_nalu_ = false;
++  }
++  if (is_vcl_nalu) {
++    frame_has_vcl_nalu_ = true;
++  }
++
++  return FrameBoundaryInfo{.is_whole_frame = false,
++                           .is_start_of_new_frame = is_start_of_new_frame,
++                           .nalu_size = nalu_size};
++}
++
+ }  // namespace media
+diff --git a/media/gpu/v4l2/v4l2_stateful_video_decoder.h b/media/gpu/v4l2/v4l2_stateful_video_decoder.h
+index b0e85f0e45..35c65c35d2 100644
+--- a/media/gpu/v4l2/v4l2_stateful_video_decoder.h
++++ b/media/gpu/v4l2/v4l2_stateful_video_decoder.h
+@@ -25,8 +25,7 @@ class SingleThreadTaskRunner;
+ 
+ namespace media {
+ 
+-class H264FrameReassembler;
+-class H264Parser;
++class FrameReassembler;
+ class V4L2FrameRateControl;
+ class V4L2Queue;
+ 
+@@ -186,8 +185,8 @@ class MEDIA_GPU_EXPORT V4L2StatefulVideoDecoder : public VideoDecoderMixin {
+   base::CancelableTaskTracker cancelable_task_tracker_
+       GUARDED_BY_CONTEXT(sequence_checker_);
+ 
+-  // Optional helper class to reassemble full H.264 frames out of NALUs.
+-  std::unique_ptr<H264FrameReassembler> h264_frame_reassembler_
++  // Optional helper class to reassemble full H.264/H.265 frames out of NALUs.
++  std::unique_ptr<FrameReassembler> frame_reassembler_
+       GUARDED_BY_CONTEXT(sequence_checker_);
+ 
+   // Pegged to the construction and main work thread. Notably, |task_runner| is
+-- 
+2.45.2
+

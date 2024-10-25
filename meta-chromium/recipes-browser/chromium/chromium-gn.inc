@@ -50,6 +50,24 @@ SRC_URI:append:libc-musl = "\
     file://musl/0015-fix-libc-version-include.patch \
 "
 
+# collabora patches.
+SRC_URI += "\
+    file://collabora/0001-media-Rename-some-Vaapi-features-to-Accelerated.patch \
+    file://collabora/0002-media-gpu-v4l2-Support-mainline-Linux-device-paths.patch \
+    file://collabora/0003-media-gpu-v4l2-Additional-support-for-mainline-linux.patch \
+    file://collabora/0004-media-capture-v4l2-Add-V4L2_BUF_TYPE_VIDEO_CAPTURE_M.patch \
+    file://collabora/0005-media-gpu-v4l2-V4L2StatefulVD-Support-HEVC-fragment-.patch \
+    file://collabora/0006-media-gpu-chromeos-Prefer-the-v4l2-image-processor-i.patch \
+    file://collabora/0007-media-gpu-v4l2-Use-the-proper-image-width-for-v4l2-i.patch \
+    file://collabora/0008-media-gpu-Enable-v4l2-encoding-support-on-Linux.patch \
+    file://collabora/0009-blink-renderer-Allow-VBR-mode-on-CBR-only-encoders-f.patch \
+    file://collabora/0010-media-gpu-v4l2-Use-proper-image-width-when-reconfigu.patch \
+    file://collabora/0011-WIP-media-gpu-v4l2-Enable-v4l2-HEVC-encoding.patch \
+    file://collabora/0012-media-gpu-v4l2-V4l2StatefulVD-Listen-to-POLLOUT-even.patch \
+    file://collabora/0013-media-gpu-v4l2-Use-driver-preferred-format-for-encod.patch \
+    file://collabora/0014-media-gpu-v4l2-Don-t-advertise-the-HEVC-Main10-profi.patch \
+"
+
 ANY_OF_DISTRO_FEATURES = "opengl vulkan"
 
 # Append instead of assigning; the gtk-icon-cache class inherited above also

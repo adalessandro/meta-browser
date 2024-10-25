@@ -1,0 +1,268 @@
+From bae1ebabe64c5bb0a45c44d2682f01d002ff16b9 Mon Sep 17 00:00:00 2001
+From: Robert Mader <robert.mader@collabora.com>
+Date: Wed, 2 Oct 2024 17:53:20 +0200
+Subject: [PATCH 02/14] media/gpu/v4l2: Support mainline Linux device paths
+
+Upstream Linux does not use the ChromeOS-specific device path patterns
+for "-dec", "-enc" etc. Add support for the respective mainline patterns
+in order to improve HW de-/encoding support.
+
+This crucially requires us to enumerate a lot of /dev/video* devices, as
+it has become common for SoCs to have >100 of them - usually most of
+them used for ISPs. Unfortunately enumerating many devices - even
+non-existing ones, as we don't know ahead of time in sandboxed
+environments - is not free. Using 256 takes roughly 30-60ms on platforms
+like RK3399 or MT8390 respectively, while raising the number to e.g.
+1024 would take it to >100ms, and was therefor used as solid limit.
+
+Given that the increased time cost only applies to non-ChromeOS Linux
+with `use_v4l2_codec` enabled, the tradeoff is likely justified, as
+chances are high that affected platforms do support HW-decoding in a lot
+of cases and profit a lot from using it.
+
+The change here is enough to make HW video decoding work on various
+stacks, with both stateful and stateless V4L2.
+
+Note that similar places used in tests or with the experimental
+`V4L2FlatStatefulVideoDecoder` feature where left out for now.
+
+Bug: b:334110478
+Change-Id: I9ea18aef05502c7796a61dcf15b13edc27845cd0
+---
+ media/gpu/v4l2/v4l2_device.cc   | 40 +++++++++++++++++++++-
+ media/gpu/v4l2/v4l2_device.h    |  7 ++++
+ media/gpu/v4l2/v4l2_unittest.cc | 28 +++++++++++++++
+ media/gpu/v4l2/v4l2_utils.cc    | 60 ++++++++++++++++++++-------------
+ 4 files changed, 111 insertions(+), 24 deletions(-)
+
+diff --git a/media/gpu/v4l2/v4l2_device.cc b/media/gpu/v4l2/v4l2_device.cc
+index 39c16611c7..7b512fa7ba 100644
+--- a/media/gpu/v4l2/v4l2_device.cc
++++ b/media/gpu/v4l2/v4l2_device.cc
+@@ -129,6 +129,11 @@ bool V4L2Device::Open(Type type, uint32_t v4l2_pixfmt) {
+     return false;
+   }
+ 
++  // Used to test device enumeration
++  if (path == device_path_for_testing_) {
++    return true;
++  }
++
+   if (!OpenDevicePath(path)) {
+     VLOGF(1) << "Failed opening " << path;
+     return false;
+@@ -686,7 +691,11 @@ V4L2RequestsQueue* V4L2Device::GetRequestsQueue() {
+   // this should be fine, since |GetRequestsQueue()| is only called after
+   // the codec format is configured, and the VD/VDA instance is always tied
+   // to a specific format, so it will never need to switch media devices.
++#if BUILDFLAG(IS_CHROMEOS)
+   static const std::string kRequestDevicePrefix = "/dev/media-dec";
++#else
++  static const std::string kRequestDevicePrefix = "/dev/media";
++#endif
+ 
+   // We are sandboxed, so we can't query directory contents to check which
+   // devices are actually available. Try to open the first 10; if not present,
+@@ -852,11 +861,19 @@ void V4L2Device::CloseDevice() {
+ }
+ 
+ void V4L2Device::EnumerateDevicesForType(Type type) {
++#if BUILDFLAG(IS_CHROMEOS)
+   static const std::string kDecoderDevicePattern = "/dev/video-dec";
+   static const std::string kEncoderDevicePattern = "/dev/video-enc";
+   static const std::string kImageProcessorDevicePattern = "/dev/image-proc";
+   static const std::string kJpegDecoderDevicePattern = "/dev/jpeg-dec";
+   static const std::string kJpegEncoderDevicePattern = "/dev/jpeg-enc";
++#else
++  static const std::string kDecoderDevicePattern = "/dev/video";
++  static const std::string kEncoderDevicePattern = "/dev/video";
++  static const std::string kImageProcessorDevicePattern = "/dev/video";
++  static const std::string kJpegDecoderDevicePattern = "/dev/video";
++  static const std::string kJpegEncoderDevicePattern = "/dev/video";
++#endif
+ 
+   std::string device_pattern;
+   v4l2_buf_type buf_type;
+@@ -892,13 +909,34 @@ void V4L2Device::EnumerateDevicesForType(Type type) {
+   // We are sandboxed, so we can't query directory contents to check which
+   // devices are actually available. Try to open the first 10; if not present,
+   // we will just fail to open immediately.
+-  for (int i = 0; i < 10; ++i) {
++#if BUILDFLAG(IS_CHROMEOS)
++  static int kMaxDevices = 10;
++#else
++  // On mainline Linux we need to check a much larger number of devices, mainly
++  // because the device pattern is shared with ISP devices.
++  static int kMaxDevices = 256;
++#endif
++  for (int i = 0; i < kMaxDevices; ++i) {
+     candidate_paths.push_back(
+         base::StringPrintf("%s%d", device_pattern.c_str(), i));
+   }
+ 
+   Devices devices;
+   for (const auto& path : candidate_paths) {
++    if (path == device_path_for_testing_) {
++      std::vector<uint32_t> supported_pixelformats;
++
++      if (type == Type::kDecoder) {
++        supported_pixelformats.push_back(V4L2_PIX_FMT_NV12);
++      }
++
++      if (!supported_pixelformats.empty()) {
++        devices.push_back(std::make_pair(path, supported_pixelformats));
++      }
++
++      continue;
++    }
++
+     if (!OpenDevicePath(path)) {
+       continue;
+     }
+diff --git a/media/gpu/v4l2/v4l2_device.h b/media/gpu/v4l2/v4l2_device.h
+index 2d2800f392..56578c1b7b 100644
+--- a/media/gpu/v4l2/v4l2_device.h
++++ b/media/gpu/v4l2/v4l2_device.h
+@@ -222,6 +222,11 @@ class MEDIA_GPU_EXPORT V4L2Device
+     return secure_allocate_cb_;
+   }
+ 
++  // Set a path to test device enumeration
++  void set_device_path_for_testing(std::string device_path) {
++    device_path_for_testing_ = device_path;
++  }
++
+  private:
+   friend class base::RefCountedThreadSafe<V4L2Device>;
+   // Vector of video device node paths and corresponding pixelformats supported
+@@ -286,6 +291,8 @@ class MEDIA_GPU_EXPORT V4L2Device
+   AllocateSecureBufferAsCallback secure_allocate_cb_;
+ 
+   SEQUENCE_CHECKER(client_sequence_checker_);
++
++  std::string device_path_for_testing_;
+ };
+ 
+ }  //  namespace media
+diff --git a/media/gpu/v4l2/v4l2_unittest.cc b/media/gpu/v4l2/v4l2_unittest.cc
+index 8c09f2fb1a..4bd676fe21 100644
+--- a/media/gpu/v4l2/v4l2_unittest.cc
++++ b/media/gpu/v4l2/v4l2_unittest.cc
+@@ -345,6 +345,34 @@ TEST_F(V4L2FlatVideoDecoderTest, TooManyDecoderInstances) {
+                    /*waiting_cb*/ base::DoNothing());
+ }
+ 
++class V4L2VideoDeviceTest : public ::testing::Test {
++ public:
++  V4L2VideoDeviceTest() = default;
++};
++
++// Verifies that V4L2Device::EnumerateDevicesForType() enumerates certain device
++// paths
++TEST_F(V4L2VideoDeviceTest, DevicePathEnumeration) {
++  std::string device_path;
++#if BUILDFLAG(IS_CHROMEOS)
++  device_path = "/dev/video-dec7";
++#else
++  device_path = "/dev/video150";
++#endif
++
++  scoped_refptr<V4L2Device> device(new V4L2Device());
++  ASSERT_FALSE(device->Open(V4L2Device::Type::kDecoder, V4L2_PIX_FMT_NV12));
++  ASSERT_FALSE(device->Open(V4L2Device::Type::kDecoder, V4L2_PIX_FMT_YUV420));
++
++  scoped_refptr<V4L2Device> device_with_test_path(new V4L2Device());
++  device_with_test_path->set_device_path_for_testing(device_path);
++
++  ASSERT_TRUE(device_with_test_path->Open(V4L2Device::Type::kDecoder,
++                                          V4L2_PIX_FMT_NV12));
++  ASSERT_FALSE(device_with_test_path->Open(V4L2Device::Type::kDecoder,
++                                           V4L2_PIX_FMT_YUV420));
++}
++
+ }  // namespace media
+ 
+ int main(int argc, char** argv) {
+diff --git a/media/gpu/v4l2/v4l2_utils.cc b/media/gpu/v4l2/v4l2_utils.cc
+index c3d5230f49..3162a5846e 100644
+--- a/media/gpu/v4l2/v4l2_utils.cc
++++ b/media/gpu/v4l2/v4l2_utils.cc
+@@ -570,38 +570,52 @@ struct timeval TimeDeltaToTimeVal(base::TimeDelta time_delta) {
+ 
+ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
+   SupportedVideoDecoderConfigs supported_media_configs;
++  std::vector<std::string> candidate_paths;
+ 
+-  constexpr char kVideoDeviceDriverPath[] = "/dev/video-dec0";
+-  base::ScopedFD device_fd(HANDLE_EINTR(
+-      open(kVideoDeviceDriverPath, O_RDWR | O_NONBLOCK | O_CLOEXEC)));
+-  if (!device_fd.is_valid()) {
+-    PLOG(ERROR) << "Could not open " << kVideoDeviceDriverPath;
+-    return std::nullopt;
++#if BUILDFLAG(IS_CHROMEOS)
++  constexpr char kVideoDevicePattern[] = "/dev/video-dec0";
++  candidate_paths.push_back(kVideoDevicePattern);
++#else
++  constexpr char kVideoDevicePattern[] = "/dev/video";
++  for (int i = 0; i < 256; ++i) {
++    candidate_paths.push_back(
++        base::StringPrintf("%s%d", kVideoDevicePattern, i));
+   }
++#endif
+ 
+-  std::vector<uint32_t> v4l2_codecs = EnumerateSupportedPixFmts(
+-      base::BindRepeating(&HandledIoctl, device_fd.get()),
+-      V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
++  for (const auto& path : candidate_paths) {
++    base::ScopedFD device_fd(
++        HANDLE_EINTR(open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC)));
++    if (!device_fd.is_valid()) {
++      PLOG(WARNING) << "Could not open " << path;
++      continue;
++    }
++
++    std::vector<uint32_t> v4l2_codecs = EnumerateSupportedPixFmts(
++        base::BindRepeating(&HandledIoctl, device_fd.get()),
++        V4L2_BUF_TYPE_VIDEO_OUTPUT_MPLANE);
+ 
+-  for (const uint32_t v4l2_codec : v4l2_codecs) {
+-    const std::vector<VideoCodecProfile> media_codec_profiles =
+-        EnumerateSupportedProfilesForV4L2Codec(
+-            base::BindRepeating(&HandledIoctl, device_fd.get()), v4l2_codec);
++    for (const uint32_t v4l2_codec : v4l2_codecs) {
++      const std::vector<VideoCodecProfile> media_codec_profiles =
++          EnumerateSupportedProfilesForV4L2Codec(
++              base::BindRepeating(&HandledIoctl, device_fd.get()), v4l2_codec);
+ 
+-    gfx::Size min_coded_size;
+-    gfx::Size max_coded_size;
+-    GetSupportedResolution(base::BindRepeating(&HandledIoctl, device_fd.get()),
+-                           v4l2_codec, &min_coded_size, &max_coded_size);
++      gfx::Size min_coded_size;
++      gfx::Size max_coded_size;
++      GetSupportedResolution(
++          base::BindRepeating(&HandledIoctl, device_fd.get()), v4l2_codec,
++          &min_coded_size, &max_coded_size);
+ 
+-    for (const auto& profile : media_codec_profiles) {
+-      supported_media_configs.emplace_back(SupportedVideoDecoderConfig(
+-          profile, profile, min_coded_size, max_coded_size,
++      for (const auto& profile : media_codec_profiles) {
++        supported_media_configs.emplace_back(SupportedVideoDecoderConfig(
++            profile, profile, min_coded_size, max_coded_size,
+ #if BUILDFLAG(USE_CHROMEOS_PROTECTED_MEDIA)
+-          /*allow_encrypted=*/true,
++            /*allow_encrypted=*/true,
+ #else
+-          /*allow_encrypted=*/false,
++            /*allow_encrypted=*/false,
+ #endif
+-          /*require_encrypted=*/false));
++            /*require_encrypted=*/false));
++      }
+     }
+   }
+ 
+-- 
+2.45.2
+

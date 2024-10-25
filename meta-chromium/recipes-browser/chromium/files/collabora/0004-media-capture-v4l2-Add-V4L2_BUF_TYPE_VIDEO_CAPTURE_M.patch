@@ -1,0 +1,359 @@
+From 8667c91b0cd477a581a1b2e019c6803b8a1b70b8 Mon Sep 17 00:00:00 2001
+From: Robert Mader <robert.mader@collabora.com>
+Date: Wed, 2 Oct 2024 11:28:00 +0200
+Subject: [PATCH 04/14] media/capture/v4l2: Add
+ V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE support
+
+This adds support for the `_MPLANE` API, in a similar way to how it is
+implemented in Gstreamer. The main goal is allow ISP drivers that support both formats with non contiguous planes, such as V4L2_PIX_FMT_NV12M / NM12, and single plane formats, such as V4L2_PIX_FMT_YUYV, to work OOTB.
+
+For now no format additions are made and only the already supported single plane formats are recognized, in order to keep the number of changes and risk of regression as small as possible.
+The patch has been tested to not change behavior or regress for common UVC devices.
+
+This allows Chromium to have working cameras on various SoCs / setups,
+until the Pipewire backend is mature enough to be used instead.
+
+Note: with this change, the reported API is still `VideoCaptureApi::LINUX_V4L2_SINGLE_PLANE` while strictly speaking it should be using a new `VideoCaptureApi::LINUX_V4L2_MULTI_PLANE` one. For now this would cause arguably unnecessary churn, but it should be considered in case support for real multi-plane formats get added in a follow-up.
+
+Bug: b:365680824
+Change-Id: I07cd37e3dd9711fdccad313fc5c3e50f82f8009c
+---
+ .../video/linux/v4l2_capture_delegate.cc      | 96 +++++++++++++------
+ .../video_capture_device_factory_v4l2.cc      | 28 ++++--
+ .../linux/video_capture_device_factory_v4l2.h |  7 ++
+ 3 files changed, 98 insertions(+), 33 deletions(-)
+
+diff --git a/media/capture/video/linux/v4l2_capture_delegate.cc b/media/capture/video/linux/v4l2_capture_delegate.cc
+index 3318fba979..10be39e9e0 100644
+--- a/media/capture/video/linux/v4l2_capture_delegate.cc
++++ b/media/capture/video/linux/v4l2_capture_delegate.cc
+@@ -107,27 +107,33 @@ struct {
+ 
+ // Fill in |format| with the given parameters.
+ void FillV4L2Format(v4l2_format* format,
++                    v4l2_buf_type buffer_type,
+                     uint32_t width,
+                     uint32_t height,
+                     uint32_t pixelformat_fourcc) {
+   memset(format, 0, sizeof(*format));
+-  format->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++  format->type = buffer_type;
+   format->fmt.pix.width = width;
+   format->fmt.pix.height = height;
+   format->fmt.pix.pixelformat = pixelformat_fourcc;
+ }
+ 
+ // Fills all parts of |buffer|.
+-void FillV4L2Buffer(v4l2_buffer* buffer, int index) {
++void FillV4L2Buffer(v4l2_buffer* buffer, v4l2_buf_type buffer_type, int index) {
+   memset(buffer, 0, sizeof(*buffer));
+   buffer->memory = V4L2_MEMORY_MMAP;
+   buffer->index = index;
+-  buffer->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++  buffer->type = buffer_type;
++  if (buffer_type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE) {
++    buffer->length = 1;
++  }
+ }
+ 
+-void FillV4L2RequestBuffer(v4l2_requestbuffers* request_buffer, int count) {
++void FillV4L2RequestBuffer(v4l2_requestbuffers* request_buffer,
++                           v4l2_buf_type buffer_type,
++                           int count) {
+   memset(request_buffer, 0, sizeof(*request_buffer));
+-  request_buffer->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++  request_buffer->type = buffer_type;
+   request_buffer->memory = V4L2_MEMORY_MMAP;
+   request_buffer->count = count;
+ }
+@@ -358,10 +364,12 @@ void V4L2CaptureDelegate::AllocateAndStart(
+   // formats and is skipped anyways.
+   v4l2_capability cap = {};
+   if (!(DoIoctl(VIDIOC_QUERYCAP, &cap) == 0 &&
+-        (((cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) &&
++        (((cap.capabilities &
++           (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE)) &&
+           !(cap.capabilities & V4L2_CAP_VIDEO_OUTPUT)) ||
+          ((cap.capabilities & V4L2_CAP_DEVICE_CAPS) &&
+-          (cap.device_caps & V4L2_CAP_VIDEO_CAPTURE) &&
++          (cap.device_caps &
++           (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE)) &&
+           !(cap.device_caps & V4L2_CAP_VIDEO_OUTPUT))))) {
+     device_fd_.reset();
+     SetErrorState(VideoCaptureError::kV4L2ThisIsNotAV4L2VideoCaptureDevice,
+@@ -375,8 +383,15 @@ void V4L2CaptureDelegate::AllocateAndStart(
+       GetListOfUsableFourCcs(width > kMjpegWidth || height > kMjpegHeight);
+   auto best = desired_v4l2_formats.end();
+ 
++  // See the comment about V4L2_CAP_DEVICE_CAPS above - if the device does not
++  // set the capability here it will not have usable formats and it is unknown
++  // if changing that would break existing devices.
++  v4l2_buf_type buffer_type = (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)
++                                  ? V4L2_BUF_TYPE_VIDEO_CAPTURE
++                                  : V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
++
+   v4l2_fmtdesc fmtdesc = {};
+-  fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++  fmtdesc.type = buffer_type;
+   for (; DoIoctl(VIDIOC_ENUM_FMT, &fmtdesc) == 0; ++fmtdesc.index)
+     best = std::find(desired_v4l2_formats.begin(), best, fmtdesc.pixelformat);
+ 
+@@ -387,7 +402,7 @@ void V4L2CaptureDelegate::AllocateAndStart(
+   }
+ 
+   DVLOG(1) << "Chosen pixel format is " << FourccToString(*best);
+-  FillV4L2Format(&video_fmt_, width, height, *best);
++  FillV4L2Format(&video_fmt_, buffer_type, width, height, *best);
+ 
+   if (DoIoctl(VIDIOC_S_FMT, &video_fmt_) < 0) {
+     SetErrorState(VideoCaptureError::kV4L2FailedToSetVideoCaptureFormat,
+@@ -404,7 +419,7 @@ void V4L2CaptureDelegate::AllocateAndStart(
+ 
+   // Set capture framerate in the form of capture interval.
+   v4l2_streamparm streamparm = {};
+-  streamparm.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++  streamparm.type = video_fmt_.type;
+   // The following line checks that the driver knows about framerate get/set.
+   if (DoIoctl(VIDIOC_G_PARM, &streamparm) >= 0) {
+     // Now check if the device is able to accept a capture framerate set.
+@@ -971,7 +986,10 @@ void V4L2CaptureDelegate::ResetUserAndCameraControlsToDefault() {
+ 
+ bool V4L2CaptureDelegate::MapAndQueueBuffer(int index) {
+   v4l2_buffer buffer;
+-  FillV4L2Buffer(&buffer, index);
++  v4l2_plane planes[1] = {};
++
++  FillV4L2Buffer(&buffer, static_cast<v4l2_buf_type>(video_fmt_.type), index);
++  buffer.m.planes = planes;
+ 
+   if (DoIoctl(VIDIOC_QUERYBUF, &buffer) < 0) {
+     DLOG(ERROR) << "Error querying status of a MMAP V4L2 buffer";
+@@ -998,7 +1016,8 @@ bool V4L2CaptureDelegate::StartStream() {
+   DCHECK(!is_capturing_);
+ 
+   v4l2_requestbuffers r_buffer;
+-  FillV4L2RequestBuffer(&r_buffer, kNumVideoBuffers);
++  FillV4L2RequestBuffer(&r_buffer, static_cast<v4l2_buf_type>(video_fmt_.type),
++                        kNumVideoBuffers);
+   if (DoIoctl(VIDIOC_REQBUFS, &r_buffer) < 0) {
+     SetErrorState(VideoCaptureError::kV4L2ErrorRequestingMmapBuffers, FROM_HERE,
+                   "Error requesting MMAP buffers from V4L2");
+@@ -1011,8 +1030,7 @@ bool V4L2CaptureDelegate::StartStream() {
+       return false;
+     }
+   }
+-  v4l2_buf_type capture_type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+-  if (DoIoctl(VIDIOC_STREAMON, &capture_type) < 0) {
++  if (DoIoctl(VIDIOC_STREAMON, &video_fmt_.type) < 0) {
+     SetErrorState(VideoCaptureError::kV4L2VidiocStreamonFailed, FROM_HERE,
+                   "VIDIOC_STREAMON failed");
+     return false;
+@@ -1106,7 +1124,10 @@ void V4L2CaptureDelegate::DoCapture() {
+   // Deenqueue, send and reenqueue a buffer if the driver has filled one in.
+   if (device_pfd.revents & POLLIN) {
+     v4l2_buffer buffer;
+-    FillV4L2Buffer(&buffer, 0);
++    v4l2_plane planes[1] = {};
++
++    FillV4L2Buffer(&buffer, static_cast<v4l2_buf_type>(video_fmt_.type), 0);
++    buffer.m.planes = planes;
+ 
+     if (DoIoctl(VIDIOC_DQBUF, &buffer) < 0) {
+       SetErrorState(VideoCaptureError::kV4L2FailedToDequeueCaptureBuffer,
+@@ -1114,7 +1135,16 @@ void V4L2CaptureDelegate::DoCapture() {
+       return;
+     }
+ 
+-    buffer_tracker_pool_[buffer.index]->set_payload_size(buffer.bytesused);
++    size_t bytesused;
++    if (buffer.type == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
++      bytesused = buffer.bytesused;
++    } else {
++      // For _MPLANE length indicates the number of planes.
++      DCHECK(buffer.length == 1);
++      bytesused = buffer.m.planes[0].bytesused;
++    }
++
++    buffer_tracker_pool_[buffer.index]->set_payload_size(bytesused);
+     const scoped_refptr<BufferTracker>& buffer_tracker =
+         buffer_tracker_pool_[buffer.index];
+ 
+@@ -1141,11 +1171,11 @@ void V4L2CaptureDelegate::DoCapture() {
+       client_->OnFrameDropped(
+           VideoCaptureFrameDropReason::kV4L2BufferErrorFlagWasSet);
+ #endif
+-    } else if (buffer.bytesused <
++    } else if (bytesused <
+                media::VideoFrame::AllocationSize(capture_format_.pixel_format,
+                                                  capture_format_.frame_size)) {
+       LOG(ERROR) << "Dequeued v4l2 buffer contains invalid length ("
+-                 << buffer.bytesused << " bytes).";
++                 << bytesused << " bytes).";
+       buffer.bytesused = 0;
+       client_->OnFrameDropped(
+           VideoCaptureFrameDropReason::kV4L2InvalidNumberOfBytesInBuffer);
+@@ -1174,9 +1204,8 @@ void V4L2CaptureDelegate::DoCapture() {
+           std::move(take_photo_callbacks_.front());
+       take_photo_callbacks_.pop();
+ 
+-      mojom::BlobPtr blob =
+-          RotateAndBlobify(buffer_tracker->start(), buffer.bytesused,
+-                           capture_format_, rotation_);
++      mojom::BlobPtr blob = RotateAndBlobify(buffer_tracker->start(), bytesused,
++                                             capture_format_, rotation_);
+       if (blob)
+         std::move(cb).Run(std::move(blob));
+     }
+@@ -1201,8 +1230,7 @@ bool V4L2CaptureDelegate::StopStream() {
+ 
+   // The order is important: stop streaming, clear |buffer_pool_|,
+   // thus munmap()ing the v4l2_buffers, and then return them to the OS.
+-  v4l2_buf_type capture_type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+-  if (DoIoctl(VIDIOC_STREAMOFF, &capture_type) < 0) {
++  if (DoIoctl(VIDIOC_STREAMOFF, &video_fmt_.type) < 0) {
+     SetErrorState(VideoCaptureError::kV4L2VidiocStreamoffFailed, FROM_HERE,
+                   "VIDIOC_STREAMOFF failed");
+     return false;
+@@ -1211,7 +1239,8 @@ bool V4L2CaptureDelegate::StopStream() {
+   buffer_tracker_pool_.clear();
+ 
+   v4l2_requestbuffers r_buffer;
+-  FillV4L2RequestBuffer(&r_buffer, 0);
++  FillV4L2RequestBuffer(&r_buffer, static_cast<v4l2_buf_type>(video_fmt_.type),
++                        0);
+   if (DoIoctl(VIDIOC_REQBUFS, &r_buffer) < 0) {
+     SetErrorState(VideoCaptureError::kV4L2FailedToVidiocReqbufsWithCount0,
+                   FROM_HERE, "Failed to VIDIOC_REQBUFS with count = 0");
+@@ -1430,17 +1459,30 @@ V4L2CaptureDelegate::BufferTracker::~BufferTracker() {
+ 
+ bool V4L2CaptureDelegate::BufferTracker::Init(int fd,
+                                               const v4l2_buffer& buffer) {
++  size_t length;
++  size_t offset;
++  if (buffer.type == V4L2_BUF_TYPE_VIDEO_CAPTURE) {
++    length = buffer.length;
++    offset = buffer.m.offset;
++  } else {
++    DCHECK(buffer.type == V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE);
++    // For _MPLANE length indicates the number of planes.
++    DCHECK(buffer.length == 1);
++    length = buffer.m.planes[0].length;
++    offset = buffer.m.planes[0].m.mem_offset;
++  }
++
+   // Some devices require mmap() to be called with both READ and WRITE.
+   // See http://crbug.com/178582.
+   constexpr int kFlags = PROT_READ | PROT_WRITE;
+-  void* const start = v4l2_->mmap(nullptr, buffer.length, kFlags, MAP_SHARED,
+-                                  fd, buffer.m.offset);
++  void* const start =
++      v4l2_->mmap(nullptr, length, kFlags, MAP_SHARED, fd, offset);
+   if (start == MAP_FAILED) {
+     DLOG(ERROR) << "Error mmap()ing a V4L2 buffer into userspace";
+     return false;
+   }
+   start_ = static_cast<uint8_t*>(start);
+-  length_ = buffer.length;
++  length_ = length;
+   payload_size_ = 0;
+   return true;
+ }
+diff --git a/media/capture/video/linux/video_capture_device_factory_v4l2.cc b/media/capture/video/linux/video_capture_device_factory_v4l2.cc
+index 3ae03cb7d3..e693fe4b12 100644
+--- a/media/capture/video/linux/video_capture_device_factory_v4l2.cc
++++ b/media/capture/video/linux/video_capture_device_factory_v4l2.cc
+@@ -180,10 +180,12 @@ void VideoCaptureDeviceFactoryV4L2::GetDevicesInfo(
+     // formats and is skipped anyways.
+     v4l2_capability cap;
+     if ((DoIoctl(fd.get(), VIDIOC_QUERYCAP, &cap) == 0) &&
+-        ((cap.capabilities & V4L2_CAP_VIDEO_CAPTURE &&
++        ((cap.capabilities &
++              (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE) &&
+           !(cap.capabilities & V4L2_CAP_VIDEO_OUTPUT)) ||
+          (cap.capabilities & V4L2_CAP_DEVICE_CAPS &&
+-          cap.device_caps & V4L2_CAP_VIDEO_CAPTURE &&
++          cap.device_caps &
++              (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE) &&
+           !(cap.device_caps & V4L2_CAP_VIDEO_OUTPUT))) &&
+         HasUsableFormats(fd.get(), cap.capabilities)) {
+       const std::string model_id =
+@@ -196,8 +198,16 @@ void VideoCaptureDeviceFactoryV4L2::GetDevicesInfo(
+ 
+       VideoFacingMode facing_mode = VideoFacingMode::MEDIA_VIDEO_FACING_NONE;
+ 
++      // See the comment about V4L2_CAP_DEVICE_CAPS above - if the device does
++      // not set the capability here it will not have usable formats and it is
++      // unknown if changing that would break existing devices.
++      v4l2_buf_type buffer_type = (cap.capabilities & V4L2_CAP_VIDEO_CAPTURE)
++                                      ? V4L2_BUF_TYPE_VIDEO_CAPTURE
++                                      : V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
++
+       VideoCaptureFormats supported_formats;
+-      GetSupportedFormatsForV4L2BufferType(fd.get(), &supported_formats);
++      GetSupportedFormatsForV4L2BufferType(fd.get(), buffer_type,
++                                           &supported_formats);
+       if (supported_formats.empty()) {
+         DVLOG(1) << "No supported formats: " << unique_id;
+         continue;
+@@ -243,14 +253,18 @@ bool VideoCaptureDeviceFactoryV4L2::GetControlSupport(int fd, int control_id) {
+ 
+ bool VideoCaptureDeviceFactoryV4L2::HasUsableFormats(int fd,
+                                                      uint32_t capabilities) {
+-  if (!(capabilities & V4L2_CAP_VIDEO_CAPTURE)) {
++  if (!(capabilities &
++        (V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_VIDEO_CAPTURE_MPLANE))) {
+     return false;
+   }
+ 
+   const std::vector<uint32_t>& usable_fourccs =
+       VideoCaptureDeviceLinux::GetListOfUsableFourCCs(false);
+   v4l2_fmtdesc fmtdesc = {};
+-  fmtdesc.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++  fmtdesc.type = (capabilities & V4L2_CAP_VIDEO_CAPTURE)
++                     ? V4L2_BUF_TYPE_VIDEO_CAPTURE
++                     : V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE;
++
+   for (; DoIoctl(fd, VIDIOC_ENUM_FMT, &fmtdesc) == 0; ++fmtdesc.index) {
+     if (base::Contains(usable_fourccs, fmtdesc.pixelformat)) {
+       return true;
+@@ -297,9 +311,11 @@ std::vector<float> VideoCaptureDeviceFactoryV4L2::GetFrameRateList(
+ 
+ void VideoCaptureDeviceFactoryV4L2::GetSupportedFormatsForV4L2BufferType(
+     int fd,
++    v4l2_buf_type buffer_type,
+     VideoCaptureFormats* supported_formats) {
+   v4l2_fmtdesc v4l2_format = {};
+-  v4l2_format.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
++  v4l2_format.type = buffer_type;
++
+   for (; DoIoctl(fd, VIDIOC_ENUM_FMT, &v4l2_format) == 0; ++v4l2_format.index) {
+     VideoCaptureFormat supported_format;
+     supported_format.pixel_format =
+diff --git a/media/capture/video/linux/video_capture_device_factory_v4l2.h b/media/capture/video/linux/video_capture_device_factory_v4l2.h
+index 5a51b7c5ac..1fbddca3d4 100644
+--- a/media/capture/video/linux/video_capture_device_factory_v4l2.h
++++ b/media/capture/video/linux/video_capture_device_factory_v4l2.h
+@@ -17,6 +17,12 @@
+ #include "media/capture/video/linux/v4l2_capture_device.h"
+ #include "media/capture/video_capture_types.h"
+ 
++#if BUILDFLAG(IS_OPENBSD)
++#include <sys/videoio.h>
++#else
++#include <linux/videodev2.h>
++#endif
++
+ namespace media {
+ 
+ // Extension of VideoCaptureDeviceFactory to create and manipulate Linux
+@@ -62,6 +68,7 @@ class CAPTURE_EXPORT VideoCaptureDeviceFactoryV4L2
+                                       uint32_t height);
+   void GetSupportedFormatsForV4L2BufferType(
+       int fd,
++      v4l2_buf_type buffer_type,
+       VideoCaptureFormats* supported_formats);
+ 
+   scoped_refptr<V4L2CaptureDevice> v4l2_;
+-- 
+2.45.2
+
