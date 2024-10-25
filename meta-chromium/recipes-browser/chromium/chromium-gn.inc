@@ -162,6 +162,8 @@ PACKAGECONFIG[upower] = ",,,upower"
 # that not all the hardware configs might be supported.
 PACKAGECONFIG[use-vaapi] = "use_vaapi=true use_libgav1_parser=true,use_vaapi=false,libva"
 
+PACKAGECONFIG[use-v4l2-codec] = "use_v4l2_codec=true,use_v4l2_codec=false"
+
 # Base GN arguments, mostly related to features we want to enable or disable.
 GN_ARGS = " \
         ${PACKAGECONFIG_CONFARGS} \
