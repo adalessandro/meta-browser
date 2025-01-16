@@ -1,4 +1,4 @@
-From f4f50a5de596d13d18f1f9b80f83e446936a4afb Mon Sep 17 00:00:00 2001
+From 04beeabae402f02203a668b55a08a47ace41f8f4 Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Tue, 16 Jan 2024 12:29:30 +0000
 Subject: [PATCH] Adjust the Rust build to our needs
@@ -19,14 +19,14 @@ Signed-off-by: Max Ihlenfeldt <max@igalia.com>
  build/config/rust.gni            | 26 +++++++++++++++++++-------
  build/rust/rustc_wrapper.py      |  1 +
  build/rust/std/BUILD.gn          | 28 +++++++++++++++++++++-------
- build/rust/std/find_std_rlibs.py | 16 +++++++++++-----
- 4 files changed, 52 insertions(+), 19 deletions(-)
+ build/rust/std/find_std_rlibs.py | 17 ++++++++++++-----
+ 4 files changed, 53 insertions(+), 19 deletions(-)
 
 diff --git a/build/config/rust.gni b/build/config/rust.gni
-index 5b7807a..2a7802f 100644
+index 60856e609d084..2fe595c809731 100644
 --- a/build/config/rust.gni
 +++ b/build/config/rust.gni
-@@ -97,6 +97,11 @@ declare_args() {
+@@ -102,6 +102,11 @@ declare_args() {
    # a platform. Mostly applicable to Windows, where new versions can handle ANSI
    # escape sequences but it's not reliable in general.
    force_rustc_color_output = false
@@ -37,8 +37,8 @@ index 5b7807a..2a7802f 100644
 +  rust_target_triple_vendor_for_target = ""
  }
 
- # Use a separate declare_args so these variables' defaults can depend on the
-@@ -197,14 +202,21 @@ if (enable_rust) {
+ # Use the Rust toolchain built in-tree. When false, we use the prebuilt Rust
+@@ -174,14 +179,21 @@ if (enable_rust) {
  # https://issues.chromium.org/u/1/issues/372512092#comment5 for an example.
  rust_abi_target = ""
  if (is_linux || is_chromeos) {
@@ -46,7 +46,7 @@ index 5b7807a..2a7802f 100644
 +
 +  is_host = current_toolchain == host_toolchain || toolchain_for_rust_host_build_tools
 +  if (!is_host && rust_target_triple_vendor_for_target != "") {
-+    vendor = rust_target_triple_vendor_for_target
++      vendor = rust_target_triple_vendor_for_target
 +  }
 +
    if (current_cpu == "arm64") {
@@ -63,7 +63,7 @@ index 5b7807a..2a7802f 100644
      cargo_target_abi = ""
    } else if (current_cpu == "arm") {
      if (arm_float_abi == "hard") {
-@@ -214,18 +226,18 @@ if (is_linux || is_chromeos) {
+@@ -191,18 +203,18 @@ if (is_linux || is_chromeos) {
      }
      if (arm_arch == "armv7-a" || arm_arch == "armv7") {
        # No way to inform Rust about the -a suffix.
@@ -87,7 +87,7 @@ index 5b7807a..2a7802f 100644
    }
  } else if (is_android) {
 diff --git a/build/rust/rustc_wrapper.py b/build/rust/rustc_wrapper.py
-index 8f2096d..de43d44 100755
+index 8f2096dfe5e09..de43d44eed840 100755
 --- a/build/rust/rustc_wrapper.py
 +++ b/build/rust/rustc_wrapper.py
 @@ -160,6 +160,7 @@ def main():
@@ -99,7 +99,7 @@ index 8f2096d..de43d44 100755
    abs_build_root = os.getcwd().replace('\\', '/') + '/'
    is_windows = sys.platform == 'win32' or args.target_windows
 diff --git a/build/rust/std/BUILD.gn b/build/rust/std/BUILD.gn
-index 38e5ab7..136d06b 100644
+index 38e5ab76457dd..136d06b4f2db6 100644
 --- a/build/rust/std/BUILD.gn
 +++ b/build/rust/std/BUILD.gn
 @@ -192,7 +192,8 @@ if (toolchain_has_rust) {
@@ -162,7 +162,7 @@ index 38e5ab7..136d06b 100644
        # The host builds tools toolchain supports Rust only and does not use
        # the allocator remapping to point it to PartitionAlloc.
 diff --git a/build/rust/std/find_std_rlibs.py b/build/rust/std/find_std_rlibs.py
-index 386258f..e8fdaa9 100755
+index 386258f890c01..3bb6a41a40c56 100755
 --- a/build/rust/std/find_std_rlibs.py
 +++ b/build/rust/std/find_std_rlibs.py
 @@ -17,7 +17,7 @@ import re
@@ -201,7 +201,7 @@ index 386258f..e8fdaa9 100755
 
        # Use the number of times we've seen this name to disambiguate the output
        # filenames. Since we sort the input filenames including the metadata,
-@@ -117,14 +119,18 @@ def main():
+@@ -117,14 +119,19 @@ def main():
        output_filename = f"lib{concise_name}.rlib"
 
        infile = os.path.join(rustlib_dir, f)
@@ -215,8 +215,9 @@ index 386258f..e8fdaa9 100755
 +      outfile = os.path.join(lib_output_dir, f)
        copy_file(infile, outfile)
 
-+    infile = os.path.join(os.environ['RUST_TARGET_PATH'], f'{args.target}.json')
-+    outfile = os.path.join(args.output, 'target.json')
++    f = 'target.json'
++    infile = os.path.join(rustlib_dir, '..', f)
++    outfile = os.path.join(args.output, f)
 +    copy_file(infile, outfile)
 +
      depfile.write("\n")

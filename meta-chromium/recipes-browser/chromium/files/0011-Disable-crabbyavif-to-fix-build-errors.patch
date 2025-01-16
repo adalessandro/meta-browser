@@ -18,7 +18,7 @@ Signed-off-by: Max Ihlenfeldt <max@igalia.com>
  2 files changed, 5 insertions(+), 21 deletions(-)
 
 diff --git a/third_party/blink/renderer/platform/image-decoders/BUILD.gn b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
-index 6668b18..761c5fe 100644
+index b4a67bb3aa699..07d4c17f311b0 100644
 --- a/third_party/blink/renderer/platform/image-decoders/BUILD.gn
 +++ b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
 @@ -76,12 +76,9 @@ component("image_decoders") {
@@ -32,9 +32,9 @@ index 6668b18..761c5fe 100644
      deps += [
 -      "//third_party/crabbyavif",
        "//third_party/libavif",
-       "//third_party/libavifinfo",
      ]
-@@ -123,9 +120,6 @@ source_set("unit_tests") {
+   }
+@@ -122,9 +119,6 @@ source_set("unit_tests") {
    }
 
    if (enable_av1_decoder) {
@@ -46,7 +46,7 @@ index 6668b18..761c5fe 100644
    }
  }
 diff --git a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
-index f208b65..4fb788f 100644
+index 90317332a6ac9..9109e04f4ff04 100644
 --- a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 +++ b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 @@ -36,7 +36,6 @@
@@ -83,15 +83,15 @@ index f208b65..4fb788f 100644
 -    if (base::FeatureList::IsEnabled(blink::features::kCrabbyAvif)) {
 -      decoder = std::make_unique<CrabbyAVIFImageDecoder>(
 -          alpha_option, high_bit_depth_decoding_option, color_behavior,
--          max_decoded_bytes, animation_option);
+-          aux_image, max_decoded_bytes, animation_option);
 -    } else {
 -      decoder = std::make_unique<AVIFImageDecoder>(
 -          alpha_option, high_bit_depth_decoding_option, color_behavior,
--          max_decoded_bytes, animation_option);
+-          aux_image, max_decoded_bytes, animation_option);
 -    }
 +    decoder = std::make_unique<AVIFImageDecoder>(
 +        alpha_option, high_bit_depth_decoding_option, color_behavior,
-+        max_decoded_bytes, animation_option);
++        aux_image, max_decoded_bytes, animation_option);
  #endif
    }
 
