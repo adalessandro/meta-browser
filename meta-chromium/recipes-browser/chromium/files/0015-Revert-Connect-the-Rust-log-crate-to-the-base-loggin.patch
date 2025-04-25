@@ -1,4 +1,4 @@
-From a8d282ffd65a8de353a446485d730b27ccd5cd67 Mon Sep 17 00:00:00 2001
+From 021ac359a3de91190c3ba3c526fd583a3d05fb3f Mon Sep 17 00:00:00 2001
 From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
 Date: Fri, 1 Nov 2024 08:48:02 -0300
 Subject: [PATCH] Revert "Connect the Rust log crate to the //base logging
@@ -27,7 +27,7 @@ Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
 ---
  base/BUILD.gn                                 | 42 ----------
  base/logging.cc                               |  9 ---
- base/logging/rust_log_integration.cc          | 24 ------
+ base/logging/rust_log_integration.cc          | 22 ------
  base/logging/rust_log_integration.h           | 29 -------
  base/logging/rust_log_integration_unittest.cc | 76 -------------------
  base/logging/rust_logger.rs                   | 74 ------------------
@@ -35,7 +35,7 @@ Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
  .../test/logging/test_rust_logger_consumer.rs | 41 ----------
  .../rust/chromium_crates_io/gnrt_config.toml  |  1 +
  third_party/rust/log/v0_4/BUILD.gn            |  2 +
- 10 files changed, 3 insertions(+), 308 deletions(-)
+ 10 files changed, 3 insertions(+), 306 deletions(-)
  delete mode 100644 base/logging/rust_log_integration.cc
  delete mode 100644 base/logging/rust_log_integration.h
  delete mode 100644 base/logging/rust_log_integration_unittest.cc
@@ -43,10 +43,10 @@ Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
  delete mode 100644 base/test/logging/test_rust_logger_consumer.rs
 
 diff --git a/base/BUILD.gn b/base/BUILD.gn
-index bc3e57164a010..ba0a6cad17477 100644
+index 0b65caa32f..4aa6fa7b81 100644
 --- a/base/BUILD.gn
 +++ b/base/BUILD.gn
-@@ -38,8 +38,6 @@ import("//build/config/sanitizers/sanitizers.gni")
+@@ -36,8 +36,6 @@ import("//build/config/sanitizers/sanitizers.gni")
  import("//build/config/sysroot.gni")
  import("//build/config/ui.gni")
  import("//build/nocompile.gni")
@@ -55,17 +55,17 @@ index bc3e57164a010..ba0a6cad17477 100644
  import("//build/timestamp.gni")
  import("//build/util/process_version.gni")
  import("//build_overrides/build.gni")
-@@ -1022,9 +1020,7 @@ component("base") {
+@@ -1036,9 +1034,7 @@ component("base") {
      # Used by metrics/crc32, except on NaCl builds.
      deps += [ "//third_party/zlib" ]
-
+ 
 -    # NaCl does not support Rust.
      deps += [
 -      ":rust_logger",
        "//third_party/rust/serde_json_lenient/v0_2/wrapper",
      ]
    }
-@@ -1545,8 +1541,6 @@ component("base") {
+@@ -1572,8 +1568,6 @@ component("base") {
        "files/scoped_temp_file.h",
        "json/json_file_value_serializer.cc",
        "json/json_file_value_serializer.h",
@@ -74,10 +74,10 @@ index bc3e57164a010..ba0a6cad17477 100644
        "memory/discardable_memory.cc",
        "memory/discardable_memory.h",
        "memory/discardable_memory_allocator.cc",
-@@ -2449,41 +2443,6 @@ component("base") {
+@@ -2504,41 +2498,6 @@ component("base") {
    }
  }
-
+ 
 -rust_bindgen("logging_log_severity_bindgen") {
 -  # TODO(danakj): Maybe combine all base bindgen targets, or all base/logging
 -  # ones even) into a single GN target? But the GN rule needs to handle multiple
@@ -116,47 +116,47 @@ index bc3e57164a010..ba0a6cad17477 100644
  if (is_linux || is_chromeos) {
    # Split out as a separate target for two reasons:
    # - the line number reader is 2x slower in debug builds if not optimized,
-@@ -3287,7 +3246,6 @@ test("base_unittests") {
+@@ -3330,7 +3289,6 @@ test("base_unittests") {
      "json/string_escape_unittest.cc",
      "json/values_util_unittest.cc",
      "lazy_instance_unittest.cc",
 -    "logging/rust_log_integration_unittest.cc",
      "logging_unittest.cc",
+     "macros/is_empty_unittest.cc",
      "memory/aligned_memory_unittest.cc",
-     "memory/discardable_memory_backing_field_trial_unittest.cc",
 diff --git a/base/logging.cc b/base/logging.cc
-index 508ce135131aa..d296b81fa6d36 100644
+index e996f8c614..a4e3984cd9 100644
 --- a/base/logging.cc
 +++ b/base/logging.cc
-@@ -126,10 +126,6 @@ typedef FILE* FileHandle;
+@@ -118,10 +118,6 @@ typedef FILE* FileHandle;
  #include "base/fuchsia/scoped_fx_logger.h"
  #endif
-
+ 
 -#if !BUILDFLAG(IS_NACL)
 -#include "base/logging/rust_logger.rs.h"
 -#endif
 -
  namespace logging {
-
+ 
  namespace {
-@@ -526,11 +522,6 @@ bool BaseInitLoggingImpl(const LoggingSettings& settings) {
+@@ -530,11 +526,6 @@ bool BaseInitLoggingImpl(const LoggingSettings& settings) {
    }
  #endif
-
+ 
 -#if !BUILDFLAG(IS_NACL)
 -  // Connects Rust logging with the //base logging functionality.
 -  internal::init_rust_log_crate();
 -#endif
 -
    // Ignore file options unless logging to file is set.
-   if ((g_logging_destination & LOG_TO_FILE) == 0)
+   if ((g_logging_destination & LOG_TO_FILE) == 0) {
      return true;
 diff --git a/base/logging/rust_log_integration.cc b/base/logging/rust_log_integration.cc
 deleted file mode 100644
-index 1dba55d18a64a..0000000000000
+index 29accefbf7..0000000000
 --- a/base/logging/rust_log_integration.cc
 +++ /dev/null
-@@ -1,24 +0,0 @@
+@@ -1,22 +0,0 @@
 -// Copyright 2024 The Chromium Authors
 -// Use of this source code is governed by a BSD-style license that can be
 -// found in the LICENSE file.
@@ -166,8 +166,7 @@ index 1dba55d18a64a..0000000000000
 -#include "base/logging.h"
 -#include "base/logging/log_severity.h"
 -
--namespace logging {
--namespace internal {
+-namespace logging::internal {
 -
 -BASE_EXPORT void print_rust_log(const char* msg,
 -                                const char* file,
@@ -179,11 +178,10 @@ index 1dba55d18a64a..0000000000000
 -  log_message.stream() << msg;
 -}
 -
--}  // namespace internal
--}  // namespace logging
+-}  // namespace logging::internal
 diff --git a/base/logging/rust_log_integration.h b/base/logging/rust_log_integration.h
 deleted file mode 100644
-index 1795950e18557..0000000000000
+index 1795950e18..0000000000
 --- a/base/logging/rust_log_integration.h
 +++ /dev/null
 @@ -1,29 +0,0 @@
@@ -218,7 +216,7 @@ index 1795950e18557..0000000000000
 -#endif  // BASE_LOGGING_RUST_LOG_INTEGRATION_H_
 diff --git a/base/logging/rust_log_integration_unittest.cc b/base/logging/rust_log_integration_unittest.cc
 deleted file mode 100644
-index 8fc0fec7e1350..0000000000000
+index 8fc0fec7e1..0000000000
 --- a/base/logging/rust_log_integration_unittest.cc
 +++ /dev/null
 @@ -1,76 +0,0 @@
@@ -300,7 +298,7 @@ index 8fc0fec7e1350..0000000000000
 -}  // namespace logging
 diff --git a/base/logging/rust_logger.rs b/base/logging/rust_logger.rs
 deleted file mode 100644
-index 918c1ce0f58bd..0000000000000
+index 918c1ce0f5..0000000000
 --- a/base/logging/rust_logger.rs
 +++ /dev/null
 @@ -1,74 +0,0 @@
@@ -379,21 +377,21 @@ index 918c1ce0f58bd..0000000000000
 -    log::set_max_level(LevelFilter::Trace);
 -}
 diff --git a/base/test/BUILD.gn b/base/test/BUILD.gn
-index ddf58b1d496e0..77b571c31a31c 100644
+index 82fab133d0..b309b0e2a2 100644
 --- a/base/test/BUILD.gn
 +++ b/base/test/BUILD.gn
-@@ -7,7 +7,6 @@ import("//build/config/chromeos/ui_mode.gni")
+@@ -6,7 +6,6 @@ import("//build/compiled_action.gni")
  import("//build/config/features.gni")
  import("//build/config/nacl/config.gni")
  import("//build/config/ui.gni")
 -import("//build/rust/rust_static_library.gni")
  import("//build_overrides/build.gni")
  import("//third_party/protobuf/proto_library.gni")
-
-@@ -39,17 +38,6 @@ static_library("test_config") {
+ 
+@@ -38,17 +37,6 @@ static_library("test_config") {
    ]
  }
-
+ 
 -rust_static_library("test_rust_logger_consumer") {
 -  allow_unsafe = true  # Unsafe needed for FFI
 -  testonly = true
@@ -408,8 +406,8 @@ index ddf58b1d496e0..77b571c31a31c 100644
  static_library("test_support") {
    testonly = true
    sources = [
-@@ -189,7 +177,6 @@ static_library("test_support") {
-
+@@ -188,7 +176,6 @@ static_library("test_support") {
+ 
    public_deps = [
      ":test_config",
 -    ":test_rust_logger_consumer",
@@ -418,7 +416,7 @@ index ddf58b1d496e0..77b571c31a31c 100644
      "//base:i18n",
 diff --git a/base/test/logging/test_rust_logger_consumer.rs b/base/test/logging/test_rust_logger_consumer.rs
 deleted file mode 100644
-index dc8adc6b85f22..0000000000000
+index dc8adc6b85..0000000000
 --- a/base/test/logging/test_rust_logger_consumer.rs
 +++ /dev/null
 @@ -1,41 +0,0 @@
@@ -464,24 +462,24 @@ index dc8adc6b85f22..0000000000000
 -    error!("test log with placeholder {}", i);
 -}
 diff --git a/third_party/rust/chromium_crates_io/gnrt_config.toml b/third_party/rust/chromium_crates_io/gnrt_config.toml
-index 9f36dd0efc3d3..828786f06ff8c 100644
+index e1468f0903..ab24d1ff3d 100644
 --- a/third_party/rust/chromium_crates_io/gnrt_config.toml
 +++ b/third_party/rust/chromium_crates_io/gnrt_config.toml
-@@ -163,6 +163,7 @@ ban_features = [
- ]
-
+@@ -234,6 +234,7 @@ ban_features = [
+ license_files= ["LICENSE.txt"]
+ 
  [crate.log]
 +group = 'test'
-
- [crate.nom]
- remove_deps = ['minimal-lexical']
+ 
+ [crate.miniz_oxide.extra_kv]
+ # Web tests (aka WPT tests, also formerly known as Layout Tests) require fast
 diff --git a/third_party/rust/log/v0_4/BUILD.gn b/third_party/rust/log/v0_4/BUILD.gn
-index 6db643f2c446b..6e871e1b71808 100644
+index 52ec72c380..0a3438a678 100644
 --- a/third_party/rust/log/v0_4/BUILD.gn
 +++ b/third_party/rust/log/v0_4/BUILD.gn
-@@ -43,4 +43,6 @@ cargo_crate("lib") {
-     "release_max_level_info",
-     "std",
+@@ -47,4 +47,6 @@ cargo_crate("lib") {
+   rustflags = [
+     "--cap-lints=allow",  # Suppress all warnings in crates.io crates
    ]
 +
 +  testonly = true
