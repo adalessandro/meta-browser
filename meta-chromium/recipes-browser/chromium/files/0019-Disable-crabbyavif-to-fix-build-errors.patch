@@ -1,4 +1,4 @@
-From a51bea5534076916587c4bebc2299d7881d6fad7 Mon Sep 17 00:00:00 2001
+From 04dfcb2b2f0e1114aba3f9661ac4c4726af2835f Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Mon, 5 Aug 2024 09:33:42 +0000
 Subject: [PATCH] Disable crabbyavif to fix build errors
@@ -18,25 +18,25 @@ Signed-off-by: Max Ihlenfeldt <max@igalia.com>
  2 files changed, 5 insertions(+), 21 deletions(-)
 
 diff --git a/third_party/blink/renderer/platform/image-decoders/BUILD.gn b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
-index 6dbddaa2e3..2b5f660196 100644
+index e638c6bfcd..2ebd8a23b1 100644
 --- a/third_party/blink/renderer/platform/image-decoders/BUILD.gn
 +++ b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
-@@ -82,12 +82,9 @@ component("image_decoders") {
+@@ -81,12 +81,9 @@ component("image_decoders") {
      sources += [
        "avif/avif_image_decoder.cc",
        "avif/avif_image_decoder.h",
 -      "avif/crabbyavif_image_decoder.cc",
 -      "avif/crabbyavif_image_decoder.h",
      ]
-
+ 
      deps += [
 -      "//third_party/crabbyavif",
        "//third_party/libavif",
      ]
    }
-@@ -136,9 +133,6 @@ source_set("unit_tests") {
+@@ -135,9 +132,6 @@ source_set("unit_tests") {
    }
-
+ 
    if (enable_av1_decoder) {
 -    sources += [
 -      "avif/avif_image_decoder_test.cc",
@@ -46,7 +46,7 @@ index 6dbddaa2e3..2b5f660196 100644
    }
  }
 diff --git a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
-index bdbbe08142..8b08f320cd 100644
+index 0523ccbd18..222feae952 100644
 --- a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 +++ b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 @@ -37,7 +37,6 @@
@@ -58,12 +58,12 @@ index bdbbe08142..8b08f320cd 100644
  #include "third_party/blink/renderer/platform/image-decoders/bmp/bmp_image_decoder.h"
  #include "third_party/blink/renderer/platform/image-decoders/fast_shared_buffer_reader.h"
 @@ -53,7 +52,6 @@
-
+ 
  #if BUILDFLAG(ENABLE_AV1_DECODER)
  #include "third_party/blink/renderer/platform/image-decoders/avif/avif_image_decoder.h"
 -#include "third_party/blink/renderer/platform/image-decoders/avif/crabbyavif_image_decoder.h"
  #endif
-
+ 
  namespace blink {
 @@ -198,9 +196,7 @@ String SniffMimeTypeInternal(scoped_refptr<SegmentReader> reader) {
      return "image/bmp";
@@ -94,4 +94,4 @@ index bdbbe08142..8b08f320cd 100644
 +        aux_image, max_decoded_bytes, animation_option);
  #endif
    }
-
+ 
