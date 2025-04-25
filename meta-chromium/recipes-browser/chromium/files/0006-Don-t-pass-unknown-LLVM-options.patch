@@ -1,4 +1,4 @@
-From 651736ea42939ae67169d3429489ae9f304eae3c Mon Sep 17 00:00:00 2001
+From c77c84054484923557a0c09b1d1dd21974724d01 Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Fri, 8 Dec 2023 11:47:43 +0000
 Subject: [PATCH] Don't pass unknown LLVM options
@@ -17,13 +17,13 @@ Signed-off-by: Max Ihlenfeldt <max@igalia.com>
  1 file changed, 18 deletions(-)
 
 diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
-index 8951f6006c..cc300e7122 100644
+index a06118c238..04bd7ef891 100644
 --- a/build/config/compiler/BUILD.gn
 +++ b/build/config/compiler/BUILD.gn
-@@ -591,24 +591,6 @@ config("compiler") {
+@@ -601,24 +601,6 @@ config("compiler") {
        }
      }
-
+ 
 -    # TODO(crbug.com/40283598): This causes binary size growth and potentially
 -    # other problems.
 -    # TODO(crbug.com/40284925): This isn't supported by Cronet's mainline llvm version.
