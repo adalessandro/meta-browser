@@ -1,4 +1,4 @@
-From 5f8558eedf059e4711d234e6da0413ab26b86334 Mon Sep 17 00:00:00 2001
+From 4b1bea2e6bc33da9083238f4995a31a15d56e6f0 Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Mon, 21 Oct 2024 10:08:17 +0000
 Subject: [PATCH] Revert "Allow (and use)
@@ -21,19 +21,19 @@ Signed-off-by: Max Ihlenfeldt <max@igalia.com>
  2 files changed, 31 insertions(+), 27 deletions(-)
 
 diff --git a/components/media_router/common/providers/cast/channel/enum_table.h b/components/media_router/common/providers/cast/channel/enum_table.h
-index fba9c05770..9cd7596443 100644
+index fdf8941c32..9340ba2857 100644
 --- a/components/media_router/common/providers/cast/channel/enum_table.h
 +++ b/components/media_router/common/providers/cast/channel/enum_table.h
 @@ -12,7 +12,6 @@
-
+ 
  #include <cstdint>
  #include <cstring>
 -#include <new>
  #include <optional>
  #include <ostream>
  #include <string_view>
-@@ -366,7 +365,8 @@ class EnumTable {
-
+@@ -368,7 +367,8 @@ class EnumTable {
+ 
   private:
  #ifdef ARCH_CPU_64_BITS
 -  alignas(std::hardware_destructive_interference_size)
@@ -43,13 +43,13 @@ index fba9c05770..9cd7596443 100644
        std::initializer_list<Entry> data_;
    bool is_sorted_;
 diff --git a/styleguide/c++/c++-features.md b/styleguide/c++/c++-features.md
-index 8bde1b84da..a9222082f6 100644
+index 59df71f1e9..f51473dfd8 100644
 --- a/styleguide/c++/c++-features.md
 +++ b/styleguide/c++/c++-features.md
-@@ -574,6 +574,35 @@ Overlaps with utilities in `base/strings/string_number_conversions.h`, which are
+@@ -585,6 +585,35 @@ Overlaps with utilities in `base/strings/string_number_conversions.h`, which are
  easier to use correctly.
  ***
-
+ 
 +### std::hardware_{con,de}structive_interference_size <sup>[banned]</sup>
 +
 +```c++
@@ -80,12 +80,12 @@ index 8bde1b84da..a9222082f6 100644
 +***
 +
  ### std::in_place{_type,_index}[_t] <sup>[banned]</sup>
-
+ 
  ```c++
-@@ -1200,31 +1229,6 @@ avoiding the need to use the `erase(remove(...` paradigm.
+@@ -1209,31 +1238,6 @@ avoiding the need to use the `erase(remove(...` paradigm.
  [Migration bug](https://crbug.com/1414639)
  ***
-
+ 
 -### std::hardware_{con,de}structive_interference_size <sup>[allowed]</sup>
 -
 -```c++
@@ -112,5 +112,5 @@ index 8bde1b84da..a9222082f6 100644
 -***
 -
  ### std::is_[un]bounded_array <sup>[allowed]</sup>
-
+ 
  ```c++
