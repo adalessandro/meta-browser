@@ -30,6 +30,7 @@ SRC_URI += "\
     file://0013-Revert-Set-Rust-symbol-visibility-to-hidden-when-C-s.patch \
     file://0014-pdfium-Fix-missing-PDFiumAPIStringBufferAdapter-temp.patch \
     file://0015-Revert-Connect-the-Rust-log-crate-to-the-base-loggin.patch \
+    file://0016-rust-Use-adler-instead-of-adler2.patch \
 "
 # ARM/AArch64-specific patches.
 SRC_URI:append:aarch64 = "${@bb.utils.contains('TUNE_FEATURES', 'crypto', '', ' file://arm/0001-Fix-AES-crypto-SIGILL-on-rpi4-64.patch', d)}"
