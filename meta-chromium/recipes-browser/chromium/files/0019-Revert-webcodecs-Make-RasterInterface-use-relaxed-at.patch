@@ -1,0 +1,129 @@
+From bd06bb28a939fe88f623236754fcb9a00bdc8d29 Mon Sep 17 00:00:00 2001
+From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+Date: Sat, 26 Apr 2025 18:45:40 -0300
+Subject: [PATCH] Revert "webcodecs: Make RasterInterface use relaxed-atomic
+ memcopy for readback"
+
+This reverts commit 780efe38034cfdc1bdf4c74e82e7ca7c14e8ac5b.
+---
+ gpu/command_buffer/client/gl_helper.cc        |  6 +---
+ .../client/gles2_implementation.cc            |  8 +----
+ .../client/raster_implementation.cc           | 33 +++++--------------
+ 3 files changed, 11 insertions(+), 36 deletions(-)
+
+diff --git a/gpu/command_buffer/client/gl_helper.cc b/gpu/command_buffer/client/gl_helper.cc
+index 4bdc07751b..8362a780eb 100644
+--- a/gpu/command_buffer/client/gl_helper.cc
++++ b/gpu/command_buffer/client/gl_helper.cc
+@@ -16,7 +16,6 @@
+ #include <string>
+ #include <utility>
+ 
+-#include "base/atomicops.h"
+ #include "base/bits.h"
+ #include "base/check_op.h"
+ #include "base/containers/contains.h"
+@@ -458,11 +457,8 @@ void GLHelper::CopyTextureToImpl::ReadbackDone(Request* finished_request) {
+           dst += dst_stride * (request->size.height() - 1);
+           dst_stride = -dst_stride;
+         }
+-        // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
+-        // into memory observed by JS at the same time.
+         for (int y = 0; y < request->size.height(); y++) {
+-          base::subtle::RelaxedAtomicWriteMemcpy(
+-              base::span(dst, bytes_to_copy), base::span(src, bytes_to_copy));
++          memcpy(dst, src, bytes_to_copy);
+           dst += dst_stride;
+           src += src_stride;
+         }
+diff --git a/gpu/command_buffer/client/gles2_implementation.cc b/gpu/command_buffer/client/gles2_implementation.cc
+index c41a5020fb..4caea7faa1 100644
+--- a/gpu/command_buffer/client/gles2_implementation.cc
++++ b/gpu/command_buffer/client/gles2_implementation.cc
+@@ -28,7 +28,6 @@
+ #include <string>
+ 
+ #include "base/atomic_sequence_num.h"
+-#include "base/atomicops.h"
+ #include "base/bits.h"
+ #include "base/compiler_specific.h"
+ #include "base/containers/heap_array.h"
+@@ -4850,12 +4849,7 @@ GLboolean GLES2Implementation::ReadbackARGBImagePixelsINTERNAL(
+   if (!*readback_result) {
+     return GL_FALSE;
+   }
+-  // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing into
+-  // memory observed by JS at the same time.
+-  auto dst = base::span(static_cast<uint8_t*>(pixels), dst_size);
+-  auto src =
+-      base::span(static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size);
+-  base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
++  memcpy(pixels, static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size);
+   return GL_TRUE;
+ }
+ 
+diff --git a/gpu/command_buffer/client/raster_implementation.cc b/gpu/command_buffer/client/raster_implementation.cc
+index b3f4c43c1e..99076507e0 100644
+--- a/gpu/command_buffer/client/raster_implementation.cc
++++ b/gpu/command_buffer/client/raster_implementation.cc
+@@ -24,7 +24,6 @@
+ #include <string>
+ 
+ #include "base/atomic_sequence_num.h"
+-#include "base/atomicops.h"
+ #include "base/bits.h"
+ #include "base/compiler_specific.h"
+ #include "base/functional/bind.h"
+@@ -526,13 +525,8 @@ struct RasterImplementation::AsyncYUVReadbackRequest {
+                     uint8_t* out_buffer) {
+     // RasterDecoder writes the pixels into |in_buffer| with the requested
+     // stride so we can copy the whole block here.
+-    // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
+-    // into memory observed by JS at the same time.
+-    size_t plane_size = plane_height * plane_stride;
+-    auto dst = base::span(out_buffer, plane_size);
+-    auto src =
+-        base::span(static_cast<uint8_t*>(in_buffer) + plane_offset, plane_size);
+-    base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
++    memcpy(out_buffer, static_cast<uint8_t*>(in_buffer) + plane_offset,
++           plane_height * plane_stride);
+   }
+ };
+ 
+@@ -1560,12 +1554,9 @@ bool RasterImplementation::ReadbackImagePixelsINTERNAL(
+     if (!*readback_result) {
+       return false;
+     }
+-    // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
+-    // into memory observed by JS at the same time.
+-    auto dst = base::span<uint8_t>(static_cast<uint8_t*>(dst_pixels), dst_size);
+-    auto src = base::span<uint8_t>(
+-        static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size);
+-    base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
++
++    memcpy(dst_pixels, static_cast<uint8_t*>(shm_address) + pixels_offset,
++           dst_size);
+   }
+ 
+   return true;
+@@ -1590,16 +1581,10 @@ void RasterImplementation::OnAsyncARGBReadbackDone(
+         static_cast<cmds::ReadbackARGBImagePixelsINTERNALImmediate::Result*>(
+             request->shared_memory->address());
+     if (*result) {
+-      // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
+-      // into memory observed by JS at the same time.
+-      size_t plane_size = request->dst_size;
+-      auto dst = base::span<uint8_t>(
+-          static_cast<uint8_t*>(request->dst_pixels.get()), plane_size);
+-      auto src = base::span<uint8_t>(
+-          static_cast<uint8_t*>(request->shared_memory->address()) +
+-              request->pixels_offset,
+-          plane_size);
+-      base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
++      memcpy(request->dst_pixels,
++             static_cast<uint8_t*>(request->shared_memory->address()) +
++                 request->pixels_offset,
++             request->dst_size);
+       request->readback_successful = true;
+     }
+ 

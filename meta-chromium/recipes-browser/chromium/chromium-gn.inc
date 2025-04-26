@@ -31,6 +31,9 @@ SRC_URI += "\
     file://0014-pdfium-Fix-missing-PDFiumAPIStringBufferAdapter-temp.patch \
     file://0015-Revert-Connect-the-Rust-log-crate-to-the-base-loggin.patch \
     file://0016-rust-Use-adler-instead-of-adler2.patch \
+    file://0017-Revert-Introducing-base-RelaxedAtomicWriteMemcpy.patch \
+    file://0018-Revert-OOM-Add-memory-metrics-at-OOM-on-Android.patch \
+    file://0019-Revert-webcodecs-Make-RasterInterface-use-relaxed-at.patch \
 "
 # ARM/AArch64-specific patches.
 SRC_URI:append:aarch64 = "${@bb.utils.contains('TUNE_FEATURES', 'crypto', '', ' file://arm/0001-Fix-AES-crypto-SIGILL-on-rpi4-64.patch', d)}"
