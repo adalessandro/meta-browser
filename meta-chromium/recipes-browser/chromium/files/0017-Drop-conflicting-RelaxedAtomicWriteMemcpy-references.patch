@@ -1,0 +1,721 @@
+From b41872703db5af125ff459b750938d2de982c827 Mon Sep 17 00:00:00 2001
+From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+Date: Sat, 26 Apr 2025 18:01:39 -0300
+Subject: [PATCH] Drop conflicting RelaxedAtomicWriteMemcpy references
+
+Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+---
+ base/BUILD.gn                                 |  1 -
+ base/atomicops.cc                             | 65 ------------------
+ base/atomicops.h                              | 25 -------
+ base/atomicops_unittest.cc                    | 23 -------
+ .../browser/child_exit_observer_android.cc    |  3 +-
+ .../crash_memory_metrics_collector_android.cc | 10 +--
+ .../crash_memory_metrics_collector_android.h  |  2 +-
+ .../browser/crash_metrics_reporter_android.cc | 33 ++++------
+ ...crash_metrics_reporter_android_unittest.cc |  6 +-
+ gpu/command_buffer/client/gl_helper.cc        |  6 +-
+ .../client/gles2_implementation.cc            |  8 +--
+ .../client/raster_implementation.cc           | 33 +++-------
+ .../oom_intervention/oom_intervention_types.h |  8 ++-
+ .../crash_memory_metrics_reporter_impl.cc     | 66 +++++++++++--------
+ .../crash_memory_metrics_reporter_impl.h      | 11 ++--
+ .../controller/oom_intervention_impl.cc       |  6 +-
+ .../histograms/metadata/memory/histograms.xml | 63 +++---------------
+ 17 files changed, 95 insertions(+), 274 deletions(-)
+ delete mode 100644 base/atomicops.cc
+
+diff --git a/base/BUILD.gn b/base/BUILD.gn
+index 4aa6fa7b81..6c259dad25 100644
+--- a/base/BUILD.gn
++++ b/base/BUILD.gn
+@@ -183,7 +183,6 @@ component("base") {
+     "at_exit.h",
+     "atomic_ref_count.h",
+     "atomic_sequence_num.h",
+-    "atomicops.cc",
+     "atomicops.h",
+     "atomicops_internals_atomicword_compat.h",
+     "atomicops_internals_portable.h",
+diff --git a/base/atomicops.cc b/base/atomicops.cc
+deleted file mode 100644
+index 7b6aca4d6c..0000000000
+--- a/base/atomicops.cc
++++ /dev/null
+@@ -1,65 +0,0 @@
+-// Copyright 2024 The Chromium Authors
+-// Use of this source code is governed by a BSD-style license that can be
+-// found in the LICENSE file.
+-
+-#include "base/atomicops.h"
+-
+-#include <atomic>
+-
+-#include "base/memory/aligned_memory.h"
+-
+-namespace base::subtle {
+-
+-void RelaxedAtomicWriteMemcpy(base::span<uint8_t> dst,
+-                              base::span<const uint8_t> src) {
+-  CHECK_EQ(dst.size(), src.size());
+-  size_t bytes = dst.size();
+-  uint8_t* dst_byte_ptr = dst.data();
+-  const uint8_t* src_byte_ptr = src.data();
+-  // Make sure that we can at least copy byte by byte with atomics.
+-  static_assert(std::atomic_ref<uint8_t>::required_alignment == 1);
+-
+-  // Alignment for uintmax_t atomics that we use in the happy case.
+-  constexpr size_t kDesiredAlignment =
+-      std::atomic_ref<uintmax_t>::required_alignment;
+-
+-  // Copy byte-by-byte until `dst_byte_ptr` is not properly aligned for
+-  // the happy case.
+-  while (bytes > 0 && !IsAligned(dst_byte_ptr, kDesiredAlignment)) {
+-    std::atomic_ref<uint8_t>(*dst_byte_ptr)
+-        .store(*src_byte_ptr, std::memory_order_relaxed);
+-    // SAFETY: We check above that `dst_byte_ptr` and `src_byte_ptr` point
+-    // to spans of sufficient size.
+-    UNSAFE_BUFFERS(++dst_byte_ptr);
+-    UNSAFE_BUFFERS(++src_byte_ptr);
+-    --bytes;
+-  }
+-
+-  // Happy case where both `src_byte_ptr` and `dst_byte_ptr` are both properly
+-  // aligned and the largest possible atomic is used for copying.
+-  if (IsAligned(src_byte_ptr, kDesiredAlignment)) {
+-    while (bytes >= sizeof(uintmax_t)) {
+-      std::atomic_ref<uintmax_t>(*reinterpret_cast<uintmax_t*>(dst_byte_ptr))
+-          .store(*reinterpret_cast<const uintmax_t*>(src_byte_ptr),
+-                 std::memory_order_relaxed);
+-      // SAFETY: We check above that `dst_byte_ptr` and `src_byte_ptr` point
+-      // to spans of sufficient size.
+-      UNSAFE_BUFFERS(dst_byte_ptr += sizeof(uintmax_t));
+-      UNSAFE_BUFFERS(src_byte_ptr += sizeof(uintmax_t));
+-      bytes -= sizeof(uintmax_t);
+-    }
+-  }
+-
+-  // Copy what's left after the happy-case byte-by-byte.
+-  while (bytes > 0) {
+-    std::atomic_ref<uint8_t>(*dst_byte_ptr)
+-        .store(*src_byte_ptr, std::memory_order_relaxed);
+-    // SAFETY: We check above that `dst_byte_ptr` and `src_byte_ptr` point
+-    // to spans of sufficient size.
+-    UNSAFE_BUFFERS(++dst_byte_ptr);
+-    UNSAFE_BUFFERS(++src_byte_ptr);
+-    --bytes;
+-  }
+-}
+-
+-}  // namespace base::subtle
+diff --git a/base/atomicops.h b/base/atomicops.h
+index 7b7efaaf74..19d82f71ff 100644
+--- a/base/atomicops.h
++++ b/base/atomicops.h
+@@ -51,9 +51,6 @@
+ // - libstdc++: captures bits/c++config.h for __GLIBCXX__
+ #include <cstddef>
+ 
+-#include "base/base_export.h"
+-#include "base/compiler_specific.h"
+-#include "base/containers/span.h"
+ #include "build/build_config.h"
+ 
+ namespace base {
+@@ -141,28 +138,6 @@ Atomic64 NoBarrier_Load(volatile const Atomic64* ptr);
+ Atomic64 Acquire_Load(volatile const Atomic64* ptr);
+ #endif  // ARCH_CPU_64_BITS
+ 
+-// Copies non-overlapping spans of the same size. Writes are done using C++
+-// atomics with `std::memory_order_relaxed`.
+-//
+-// This is an analogue of `WTF::AtomicWriteMemcpy` and it should be used
+-// for copying data into buffers that are accessible from another
+-// thread while the copy is being done. The buffer will appear inconsistent,
+-// but it won't trigger C++ UB and won't upset TSAN. The end of copy needs to
+-// be signaled through a synchronization mechanism like fence, after
+-// which the `dst` buffer will be observed as consistent.
+-//
+-// Notable example is a buffer owned by `SharedArrayBuffer`.
+-// While the copy is being done, JS and WASM code can access the `dst` buffer
+-// on a different thread. The data observed by JS may not be consistent
+-// from application point of view (which is always the case with
+-// `SharedArrayBuffer`).
+-//
+-// Reads from the `src` buffer are not atomic and `src` access
+-// should be synchronized via other means.
+-// More info: crbug.com/340606792
+-BASE_EXPORT void RelaxedAtomicWriteMemcpy(base::span<uint8_t> dst,
+-                                          base::span<const uint8_t> src);
+-
+ }  // namespace subtle
+ }  // namespace base
+ 
+diff --git a/base/atomicops_unittest.cc b/base/atomicops_unittest.cc
+index 463777d461..954bdc8ed7 100644
+--- a/base/atomicops_unittest.cc
++++ b/base/atomicops_unittest.cc
+@@ -11,9 +11,7 @@
+ 
+ #include <stdint.h>
+ #include <string.h>
+-
+ #include <type_traits>
+-#include <vector>
+ 
+ #include "testing/gtest/include/gtest/gtest.h"
+ 
+@@ -242,24 +240,3 @@ TEST(AtomicOpsTest, Load) {
+   TestLoad<base::subtle::Atomic32>();
+   TestLoad<base::subtle::AtomicWord>();
+ }
+-
+-TEST(AtomicOpsTest, RelaxedAtomicWriteMemcpy) {
+-  std::vector<uint8_t> src(17);
+-  for (size_t i = 0; i < src.size(); i++) {
+-    src[i] = i + 1;
+-  }
+-
+-  for (size_t i = 0; i < src.size(); i++) {
+-    std::vector<uint8_t> dst(src.size());
+-    size_t bytes_to_copy = src.size() - i;
+-    base::subtle::RelaxedAtomicWriteMemcpy(
+-        base::span(dst).first(bytes_to_copy),
+-        base::span(src).subspan(i, bytes_to_copy));
+-    for (size_t j = 0; j < bytes_to_copy; j++) {
+-      EXPECT_EQ(src[i + j], dst[j]);
+-    }
+-    for (size_t j = bytes_to_copy; j < dst.size(); j++) {
+-      EXPECT_EQ(0, dst[j]);
+-    }
+-  }
+-}
+diff --git a/components/crash/content/browser/child_exit_observer_android.cc b/components/crash/content/browser/child_exit_observer_android.cc
+index 918404d990..2f934d7cc7 100644
+--- a/components/crash/content/browser/child_exit_observer_android.cc
++++ b/components/crash/content/browser/child_exit_observer_android.cc
+@@ -166,7 +166,8 @@ void ChildExitObserver::ProcessRenderProcessHostLifetimeEndEvent(
+   // chromecast.
+   if (collector) {
+     // SharedMemory creation / Map() might fail.
+-    info.blink_oom_metrics = collector->MemoryMetrics();
++    DCHECK(collector->MemoryMetrics());
++    info.blink_oom_metrics = *collector->MemoryMetrics();
+   }
+ 
+   if (content_info) {
+diff --git a/components/crash/content/browser/crash_memory_metrics_collector_android.cc b/components/crash/content/browser/crash_memory_metrics_collector_android.cc
+index 4a8d6d9c8a..89b13ba566 100644
+--- a/components/crash/content/browser/crash_memory_metrics_collector_android.cc
++++ b/components/crash/content/browser/crash_memory_metrics_collector_android.cc
+@@ -6,7 +6,6 @@
+ 
+ #include <utility>
+ 
+-#include "base/atomicops.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/metrics/user_metrics.h"
+ #include "content/public/browser/render_process_host.h"
+@@ -40,12 +39,9 @@ CrashMemoryMetricsCollector::CrashMemoryMetricsCollector(
+ 
+ CrashMemoryMetricsCollector::~CrashMemoryMetricsCollector() = default;
+ 
+-blink::OomInterventionMetrics CrashMemoryMetricsCollector::MemoryMetrics() {
++const blink::OomInterventionMetrics*
++CrashMemoryMetricsCollector::MemoryMetrics() {
+   // This should be called after SetSharedMemory.
+   DCHECK(metrics_mapping_.IsValid());
+-  blink::OomInterventionMetrics memory_metrics;
+-  base::subtle::RelaxedAtomicWriteMemcpy(
+-      base::byte_span_from_ref(memory_metrics),
+-      metrics_mapping_.GetMemoryAsSpan<uint8_t>());
+-  return memory_metrics;
++  return metrics_mapping_.GetMemoryAs<blink::OomInterventionMetrics>();
+ }
+diff --git a/components/crash/content/browser/crash_memory_metrics_collector_android.h b/components/crash/content/browser/crash_memory_metrics_collector_android.h
+index dd24752ca4..5c95bc1496 100644
+--- a/components/crash/content/browser/crash_memory_metrics_collector_android.h
++++ b/components/crash/content/browser/crash_memory_metrics_collector_android.h
+@@ -33,7 +33,7 @@ class CrashMemoryMetricsCollector : public base::SupportsUserData::Data {
+       content::RenderProcessHost* rph);
+ 
+   // Gets the memory metrics that are filled on the renderer side.
+-  blink::OomInterventionMetrics MemoryMetrics();
++  const blink::OomInterventionMetrics* MemoryMetrics();
+ 
+  private:
+   base::WritableSharedMemoryMapping metrics_mapping_;
+diff --git a/components/crash/content/browser/crash_metrics_reporter_android.cc b/components/crash/content/browser/crash_metrics_reporter_android.cc
+index 14161e162b..8ae7dc4b9f 100644
+--- a/components/crash/content/browser/crash_metrics_reporter_android.cc
++++ b/components/crash/content/browser/crash_metrics_reporter_android.cc
+@@ -7,10 +7,8 @@
+ #include <string_view>
+ 
+ #include "base/check.h"
+-#include "base/metrics/histogram_functions.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/metrics/user_metrics.h"
+-#include "base/process/process_metrics.h"
+ #include "base/rand_util.h"
+ #include "base/strings/strcat.h"
+ #include "components/crash/content/browser/process_exit_reason_from_system_android.h"
+@@ -104,9 +102,8 @@ void CrashMetricsReporter::ChildProcessExited(
+   const bool renderer_subframe = info.renderer_was_subframe;
+   const bool renderer_allocation_failed =
+       info.blink_oom_metrics.allocation_failed;
+-  const uint64_t available_memory_kb =
+-      info.blink_oom_metrics.current_available_memory_kb;
+-  const uint64_t swap_free_kb = info.blink_oom_metrics.current_swap_free_kb;
++  const uint64_t private_footprint_kb =
++      info.blink_oom_metrics.current_private_footprint_kb;
+ 
+   if (app_foreground && android_oom_kill) {
+     if (info.process_type == content::PROCESS_TYPE_GPU) {
+@@ -161,23 +158,15 @@ void CrashMetricsReporter::ChildProcessExited(
+           base::RecordAction(
+               base::UserMetricsAction("RendererForegroundMainFrameOOM"));
+         }
+-        base::SystemMemoryInfoKB meminfo;
+-        base::GetSystemMemoryInfo(&meminfo);
+-        base::UmaHistogramMemoryLargeMB(
+-            "Memory.Experimental.Renderer.TotalMemoryAfterOOM",
+-            meminfo.total / 1024);
+-        base::UmaHistogramMemoryLargeMB(
+-            "Memory.Experimental.Renderer.AvailableMemoryAfterOOM",
+-            meminfo.available / 1024);
+-        base::UmaHistogramMemoryLargeMB(
+-            "Memory.Experimental.Renderer.SwapFreeAfterOOM",
+-            meminfo.swap_free / 1024);
+-        base::UmaHistogramMemoryLargeMB(
+-            "Memory.Experimental.Renderer.AvailableMemoryBeforeOOM",
+-            available_memory_kb / 1024);
+-        base::UmaHistogramMemoryLargeMB(
+-            "Memory.Experimental.Renderer.SwapFreeBeforeOOM",
+-            swap_free_kb / 1024);
++        // Report memory metrics when visible foreground renderer is OOM.
++        if (private_footprint_kb > 0) {
++          // Report only when the metrics are not non-0, because the metrics
++          // are recorded only when oom intervention is on.
++          UMA_HISTOGRAM_MEMORY_LARGE_MB(
++              "Memory.Experimental.OomIntervention."
++              "RendererPrivateMemoryFootprintAtOOM",
++              private_footprint_kb / 1024);
++        }
+       }
+     } else if (!crashed) {
+       // Record stats when renderer is not visible, but the process has oom
+diff --git a/components/crash/content/browser/crash_metrics_reporter_android_unittest.cc b/components/crash/content/browser/crash_metrics_reporter_android_unittest.cc
+index 922030cd34..dfd712036e 100644
+--- a/components/crash/content/browser/crash_metrics_reporter_android_unittest.cc
++++ b/components/crash/content/browser/crash_metrics_reporter_android_unittest.cc
+@@ -59,8 +59,10 @@ class CrashMetricsReporterTest : public testing::Test {
+   blink::OomInterventionMetrics InterventionMetrics(bool allocation_failed) {
+     blink::OomInterventionMetrics metrics;
+     metrics.allocation_failed = allocation_failed;
+-    metrics.current_available_memory_kb = 100;
+-    metrics.current_swap_free_kb = 0;
++    metrics.current_private_footprint_kb = 100;
++    metrics.current_swap_kb = 0;
++    metrics.current_vm_size_kb = 0;
++    metrics.current_blink_usage_kb = 0;
+     return metrics;
+   }
+ 
+diff --git a/gpu/command_buffer/client/gl_helper.cc b/gpu/command_buffer/client/gl_helper.cc
+index 4bdc07751b..8362a780eb 100644
+--- a/gpu/command_buffer/client/gl_helper.cc
++++ b/gpu/command_buffer/client/gl_helper.cc
+@@ -16,7 +16,6 @@
+ #include <string>
+ #include <utility>
+ 
+-#include "base/atomicops.h"
+ #include "base/bits.h"
+ #include "base/check_op.h"
+ #include "base/containers/contains.h"
+@@ -458,11 +457,8 @@ void GLHelper::CopyTextureToImpl::ReadbackDone(Request* finished_request) {
+           dst += dst_stride * (request->size.height() - 1);
+           dst_stride = -dst_stride;
+         }
+-        // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
+-        // into memory observed by JS at the same time.
+         for (int y = 0; y < request->size.height(); y++) {
+-          base::subtle::RelaxedAtomicWriteMemcpy(
+-              base::span(dst, bytes_to_copy), base::span(src, bytes_to_copy));
++          memcpy(dst, src, bytes_to_copy);
+           dst += dst_stride;
+           src += src_stride;
+         }
+diff --git a/gpu/command_buffer/client/gles2_implementation.cc b/gpu/command_buffer/client/gles2_implementation.cc
+index c41a5020fb..4caea7faa1 100644
+--- a/gpu/command_buffer/client/gles2_implementation.cc
++++ b/gpu/command_buffer/client/gles2_implementation.cc
+@@ -28,7 +28,6 @@
+ #include <string>
+ 
+ #include "base/atomic_sequence_num.h"
+-#include "base/atomicops.h"
+ #include "base/bits.h"
+ #include "base/compiler_specific.h"
+ #include "base/containers/heap_array.h"
+@@ -4850,12 +4849,7 @@ GLboolean GLES2Implementation::ReadbackARGBImagePixelsINTERNAL(
+   if (!*readback_result) {
+     return GL_FALSE;
+   }
+-  // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing into
+-  // memory observed by JS at the same time.
+-  auto dst = base::span(static_cast<uint8_t*>(pixels), dst_size);
+-  auto src =
+-      base::span(static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size);
+-  base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
++  memcpy(pixels, static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size);
+   return GL_TRUE;
+ }
+ 
+diff --git a/gpu/command_buffer/client/raster_implementation.cc b/gpu/command_buffer/client/raster_implementation.cc
+index b3f4c43c1e..99076507e0 100644
+--- a/gpu/command_buffer/client/raster_implementation.cc
++++ b/gpu/command_buffer/client/raster_implementation.cc
+@@ -24,7 +24,6 @@
+ #include <string>
+ 
+ #include "base/atomic_sequence_num.h"
+-#include "base/atomicops.h"
+ #include "base/bits.h"
+ #include "base/compiler_specific.h"
+ #include "base/functional/bind.h"
+@@ -526,13 +525,8 @@ struct RasterImplementation::AsyncYUVReadbackRequest {
+                     uint8_t* out_buffer) {
+     // RasterDecoder writes the pixels into |in_buffer| with the requested
+     // stride so we can copy the whole block here.
+-    // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
+-    // into memory observed by JS at the same time.
+-    size_t plane_size = plane_height * plane_stride;
+-    auto dst = base::span(out_buffer, plane_size);
+-    auto src =
+-        base::span(static_cast<uint8_t*>(in_buffer) + plane_offset, plane_size);
+-    base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
++    memcpy(out_buffer, static_cast<uint8_t*>(in_buffer) + plane_offset,
++           plane_height * plane_stride);
+   }
+ };
+ 
+@@ -1560,12 +1554,9 @@ bool RasterImplementation::ReadbackImagePixelsINTERNAL(
+     if (!*readback_result) {
+       return false;
+     }
+-    // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
+-    // into memory observed by JS at the same time.
+-    auto dst = base::span<uint8_t>(static_cast<uint8_t*>(dst_pixels), dst_size);
+-    auto src = base::span<uint8_t>(
+-        static_cast<uint8_t*>(shm_address) + pixels_offset, dst_size);
+-    base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
++
++    memcpy(dst_pixels, static_cast<uint8_t*>(shm_address) + pixels_offset,
++           dst_size);
+   }
+ 
+   return true;
+@@ -1590,16 +1581,10 @@ void RasterImplementation::OnAsyncARGBReadbackDone(
+         static_cast<cmds::ReadbackARGBImagePixelsINTERNALImmediate::Result*>(
+             request->shared_memory->address());
+     if (*result) {
+-      // We need to use `RelaxedAtomicWriteMemcpy` because we might be writing
+-      // into memory observed by JS at the same time.
+-      size_t plane_size = request->dst_size;
+-      auto dst = base::span<uint8_t>(
+-          static_cast<uint8_t*>(request->dst_pixels.get()), plane_size);
+-      auto src = base::span<uint8_t>(
+-          static_cast<uint8_t*>(request->shared_memory->address()) +
+-              request->pixels_offset,
+-          plane_size);
+-      base::subtle::RelaxedAtomicWriteMemcpy(dst, src);
++      memcpy(request->dst_pixels,
++             static_cast<uint8_t*>(request->shared_memory->address()) +
++                 request->pixels_offset,
++             request->dst_size);
+       request->readback_successful = true;
+     }
+ 
+diff --git a/third_party/blink/public/common/oom_intervention/oom_intervention_types.h b/third_party/blink/public/common/oom_intervention/oom_intervention_types.h
+index bd26265544..be04b1f2cd 100644
+--- a/third_party/blink/public/common/oom_intervention/oom_intervention_types.h
++++ b/third_party/blink/public/common/oom_intervention/oom_intervention_types.h
+@@ -16,8 +16,12 @@ namespace blink {
+ // the arm64 and renderer in the arm32.
+ 
+ struct OomInterventionMetrics {
+-  uint64_t current_available_memory_kb = 0;
+-  uint64_t current_swap_free_kb = 0;
++  uint64_t current_private_footprint_kb = 0;
++  uint64_t current_swap_kb = 0;
++  uint64_t current_vm_size_kb = 0;
++
++  // Stores the total of V8, BlinkGC and PartitionAlloc memory usage.
++  uint64_t current_blink_usage_kb = 0;
+ 
+   // Indicates whether the crash was because of virtual address space OOM.
+   // This holds only 0 or 1 as a value but because of the reason stated above,
+diff --git a/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc b/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc
+index 5ae5df6401..0c98a854c7 100644
+--- a/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc
++++ b/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.cc
+@@ -6,18 +6,12 @@
+ 
+ #include <utility>
+ 
+-#include "base/atomicops.h"
+ #include "base/metrics/histogram_macros.h"
+ #include "base/process/memory.h"
+-#include "base/process/process_metrics.h"
+ #include "partition_alloc/oom_callback.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/platform/bindings/v8_per_isolate_data.h"
+-#include "third_party/blink/renderer/platform/scheduler/public/main_thread.h"
+-#include "third_party/blink/renderer/platform/scheduler/public/main_thread_scheduler.h"
+ #include "third_party/blink/renderer/platform/wtf/allocator/partitions.h"
+-#include "third_party/blink/renderer/platform/wtf/functional.h"
+-#include "third_party/blink/renderer/platform/wtf/wtf.h"
+ 
+ namespace blink {
+ 
+@@ -36,44 +30,36 @@ CrashMemoryMetricsReporterImpl& CrashMemoryMetricsReporterImpl::Instance() {
+   return crash_memory_metrics_reporter_impl;
+ }
+ 
+-CrashMemoryMetricsReporterImpl::CrashMemoryMetricsReporterImpl()
+-    : timer_(Thread::MainThread()
+-                 ->Scheduler()
+-                 ->ToMainThreadScheduler()
+-                 ->NonWakingTaskRunner(),
+-             this,
+-             &CrashMemoryMetricsReporterImpl::SampleMemoryState) {
++CrashMemoryMetricsReporterImpl::CrashMemoryMetricsReporterImpl() {
+   ::partition_alloc::SetPartitionAllocOomCallback(
+       CrashMemoryMetricsReporterImpl::OnOOMCallback);
+ }
+ 
+-CrashMemoryMetricsReporterImpl::~CrashMemoryMetricsReporterImpl() = default;
++CrashMemoryMetricsReporterImpl::~CrashMemoryMetricsReporterImpl() {
++  MemoryUsageMonitor::Instance().RemoveObserver(this);
++}
+ 
+ void CrashMemoryMetricsReporterImpl::SetSharedMemory(
+     base::UnsafeSharedMemoryRegion shared_metrics_buffer) {
+   // This method should be called only once per process.
+   DCHECK(!shared_metrics_mapping_.IsValid());
+   shared_metrics_mapping_ = shared_metrics_buffer.Map();
+-  timer_.StartRepeating(base::Seconds(1), FROM_HERE);
++  MemoryUsageMonitor::Instance().AddObserver(this);
++}
++
++void CrashMemoryMetricsReporterImpl::OnMemoryPing(MemoryUsage usage) {
++  DCHECK(IsMainThread());
++  last_reported_metrics_ =
++      CrashMemoryMetricsReporterImpl::MemoryUsageToMetrics(usage);
++  WriteIntoSharedMemory();
+ }
+ 
+ void CrashMemoryMetricsReporterImpl::WriteIntoSharedMemory() {
+   if (!shared_metrics_mapping_.IsValid())
+     return;
+-  // TODO(crbug.com/388844091): Consider using std::atomic.
+-  base::subtle::RelaxedAtomicWriteMemcpy(
+-      shared_metrics_mapping_.GetMemoryAsSpan<uint8_t>(),
+-      base::byte_span_from_ref(last_reported_metrics_));
+-}
+-
+-void CrashMemoryMetricsReporterImpl::SampleMemoryState(TimerBase*) {
+-  base::SystemMemoryInfoKB meminfo;
+-  base::GetSystemMemoryInfo(&meminfo);
+-  OomInterventionMetrics metrics;
+-  metrics.current_available_memory_kb = meminfo.available;
+-  metrics.current_swap_free_kb = meminfo.swap_free;
+-  last_reported_metrics_ = metrics;
+-  WriteIntoSharedMemory();
++  auto* metrics_shared =
++      shared_metrics_mapping_.GetMemoryAs<OomInterventionMetrics>();
++  *metrics_shared = last_reported_metrics_;
+ }
+ 
+ void CrashMemoryMetricsReporterImpl::OnOOMCallback() {
+@@ -93,4 +79,26 @@ void CrashMemoryMetricsReporterImpl::OnOOMCallback() {
+   instance.WriteIntoSharedMemory();
+ }
+ 
++// static
++OomInterventionMetrics CrashMemoryMetricsReporterImpl::MemoryUsageToMetrics(
++    MemoryUsage usage) {
++  OomInterventionMetrics metrics;
++
++  DCHECK(!std::isnan(usage.private_footprint_bytes));
++  DCHECK(!std::isnan(usage.swap_bytes));
++  DCHECK(!std::isnan(usage.vm_size_bytes));
++  metrics.current_blink_usage_kb =
++      (usage.v8_bytes + usage.blink_gc_bytes + usage.partition_alloc_bytes) /
++      1024;
++
++  DCHECK(!std::isnan(usage.private_footprint_bytes));
++  DCHECK(!std::isnan(usage.swap_bytes));
++  DCHECK(!std::isnan(usage.vm_size_bytes));
++  metrics.current_private_footprint_kb = usage.private_footprint_bytes / 1024;
++  metrics.current_swap_kb = usage.swap_bytes / 1024;
++  metrics.current_vm_size_kb = usage.vm_size_bytes / 1024;
++  metrics.allocation_failed = 0;  // false
++  return metrics;
++}
++
+ }  // namespace blink
+diff --git a/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.h b/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.h
+index e53bfd49c9..fd1250f909 100644
+--- a/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.h
++++ b/third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.h
+@@ -12,17 +12,19 @@
+ #include "third_party/blink/public/common/oom_intervention/oom_intervention_types.h"
+ #include "third_party/blink/public/mojom/crash/crash_memory_metrics_reporter.mojom-blink.h"
+ #include "third_party/blink/renderer/controller/controller_export.h"
+-#include "third_party/blink/renderer/platform/timer.h"
++#include "third_party/blink/renderer/controller/memory_usage_monitor.h"
+ 
+ namespace blink {
+ 
+ // Writes data about renderer into shared memory that will be read by browser.
+ class CONTROLLER_EXPORT CrashMemoryMetricsReporterImpl
+-    : public mojom::blink::CrashMemoryMetricsReporter {
++    : public mojom::blink::CrashMemoryMetricsReporter,
++      public MemoryUsageMonitor::Observer {
+  public:
+   static CrashMemoryMetricsReporterImpl& Instance();
+   static void Bind(
+       mojo::PendingReceiver<mojom::blink::CrashMemoryMetricsReporter> receiver);
++  static OomInterventionMetrics MemoryUsageToMetrics(MemoryUsage);
+ 
+   ~CrashMemoryMetricsReporterImpl() override;
+ 
+@@ -43,13 +45,14 @@ class CONTROLLER_EXPORT CrashMemoryMetricsReporterImpl
+  private:
+   FRIEND_TEST_ALL_PREFIXES(OomInterventionImplTest, CalculateProcessFootprint);
+ 
++  // MemoryUsageMonitor::Observer:
++  void OnMemoryPing(MemoryUsage) override;
++
+   void WriteIntoSharedMemory();
+-  void SampleMemoryState(TimerBase*);
+ 
+   OomInterventionMetrics last_reported_metrics_;
+   base::WritableSharedMemoryMapping shared_metrics_mapping_;
+   mojo::Receiver<mojom::blink::CrashMemoryMetricsReporter> receiver_{this};
+-  TaskRunnerTimer<CrashMemoryMetricsReporterImpl> timer_;
+ };
+ }  // namespace blink
+ 
+diff --git a/third_party/blink/renderer/controller/oom_intervention_impl.cc b/third_party/blink/renderer/controller/oom_intervention_impl.cc
+index f16fff4228..01a664df0a 100644
+--- a/third_party/blink/renderer/controller/oom_intervention_impl.cc
++++ b/third_party/blink/renderer/controller/oom_intervention_impl.cc
+@@ -16,6 +16,7 @@
+ #include "mojo/public/cpp/bindings/self_owned_receiver.h"
+ #include "third_party/blink/public/platform/platform.h"
+ #include "third_party/blink/renderer/bindings/core/v8/v8_gc_for_context_dispose.h"
++#include "third_party/blink/renderer/controller/crash_memory_metrics_reporter_impl.h"
+ #include "third_party/blink/renderer/core/frame/local_dom_window.h"
+ #include "third_party/blink/renderer/core/frame/local_frame.h"
+ #include "third_party/blink/renderer/core/loader/frame_load_request.h"
+@@ -113,10 +114,13 @@ void OomInterventionImpl::OnMemoryPing(MemoryUsage usage) {
+ void OomInterventionImpl::Check(MemoryUsage usage) {
+   DCHECK(host_);
+ 
++  OomInterventionMetrics current_memory =
++      CrashMemoryMetricsReporterImpl::MemoryUsageToMetrics(usage);
++
+   bool oom_detected = false;
+ 
+   oom_detected |= detection_args_->private_footprint_threshold > 0 &&
+-                  usage.private_footprint_bytes >
++                  current_memory.current_private_footprint_kb * 1024 >
+                       detection_args_->private_footprint_threshold;
+ 
+   if (oom_detected) {
+diff --git a/tools/metrics/histograms/metadata/memory/histograms.xml b/tools/metrics/histograms/metadata/memory/histograms.xml
+index 1aa2b5abf6..d7c68f53c0 100644
+--- a/tools/metrics/histograms/metadata/memory/histograms.xml
++++ b/tools/metrics/histograms/metadata/memory/histograms.xml
+@@ -904,27 +904,15 @@ chromium-metrics-reviews@google.com.
+   </summary>
+ </histogram>
+ 
+-<histogram name="Memory.Experimental.Renderer.AvailableMemoryAfterOOM"
+-    units="MB" expires_after="2025-06-29">
+-  <owner>etiennep@chromium.org</owner>
+-  <owner>fdoray@chromium.org</owner>
+-  <summary>
+-    The amount of available memory on the system as reported by MemAvailable
+-    from /proc/meminfo when a foreground renderer OOM occurs. This is recorded
+-    during OOM handling, it is not guaranteed that the value reflects the state
+-    at the time of the OOM. Recorded on Android.
+-  </summary>
+-</histogram>
+-
+-<histogram name="Memory.Experimental.Renderer.AvailableMemoryBeforeOOM"
+-    units="MB" expires_after="2025-06-29">
+-  <owner>etiennep@chromium.org</owner>
+-  <owner>fdoray@chromium.org</owner>
++<histogram
++    name="Memory.Experimental.OomIntervention.RendererPrivateMemoryFootprintAtOOM"
++    units="MB" expires_after="M85">
++  <owner>ssid@chromium.org</owner>
++  <owner>bashi@chromium.org</owner>
+   <summary>
+-    The amount of available memory on the system as reported by MemAvailable
+-    from /proc/meminfo when a foreground renderer OOM occurs. This is the last
+-    recorded metric by renderer a few seconds before getting killed. Recorded on
+-    Android.
++    The renderer process' private memory footprint when a foreground OOM occurs.
++    This was last recorded metric by renderer a few seconds before getting
++    killed.
+   </summary>
+ </histogram>
+ 
+@@ -947,41 +935,6 @@ chromium-metrics-reviews@google.com.
+   </summary>
+ </histogram>
+ 
+-<histogram name="Memory.Experimental.Renderer.SwapFreeAfterOOM" units="MB"
+-    expires_after="2025-06-29">
+-  <owner>etiennep@chromium.org</owner>
+-  <owner>fdoray@chromium.org</owner>
+-  <summary>
+-    Amount of swap space as reported by SwapFree from /proc/meminfo when a
+-    foreground renderer OOM occurs. This is recorded during OOM handling, it is
+-    not guaranteed that the value reflects the state at the time of the OOM.
+-    Recorded on Android.
+-  </summary>
+-</histogram>
+-
+-<histogram name="Memory.Experimental.Renderer.SwapFreeBeforeOOM" units="MB"
+-    expires_after="2025-06-29">
+-  <owner>etiennep@chromium.org</owner>
+-  <owner>fdoray@chromium.org</owner>
+-  <summary>
+-    Amount of swap space as reported by SwapFree from /proc/meminfo when a
+-    foreground renderer OOM occurs. This is the last recorded metric by renderer
+-    a few seconds before getting killed. Recorded on Android.
+-  </summary>
+-</histogram>
+-
+-<histogram name="Memory.Experimental.Renderer.TotalMemoryAfterOOM" units="MB"
+-    expires_after="2025-06-29">
+-  <owner>etiennep@chromium.org</owner>
+-  <owner>fdoray@chromium.org</owner>
+-  <summary>
+-    The total amount of memory on the system as reported by MemTotal from
+-    /proc/meminfo when a foreground renderer OOM occurs. This is recorded during
+-    OOM handling, it is not guaranteed that the value reflects the state at the
+-    time of the OOM. Recorded on Android.
+-  </summary>
+-</histogram>
+-
+ <histogram base="true" name="Memory.Experimental.Renderer2" units="MB"
+     expires_after="2025-07-27">
+ <!-- Name completed by histogram_suffixes name="ProcessMemoryAllocator2" -->

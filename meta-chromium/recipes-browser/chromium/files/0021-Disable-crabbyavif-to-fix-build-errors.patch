@@ -1,4 +1,4 @@
-From 97c9e4e5528d591deccdacf3a945bd28a07c8380 Mon Sep 17 00:00:00 2001
+From c7d55978df5014fba4ea24f19f49a8f1b4fefea0 Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Mon, 5 Aug 2024 09:33:42 +0000
 Subject: [PATCH] Disable crabbyavif to fix build errors
@@ -13,41 +13,40 @@ the CL that added it to the build, https://crrev.com/c/5542730.
 Upstream-Status: Inappropriate [upstream ticket https://crbug.com/357017325]
 Signed-off-by: Max Ihlenfeldt <max@igalia.com>
 ---
- .../blink/renderer/platform/image-decoders/BUILD.gn | 13 -------------
- .../platform/image-decoders/image_decoder.cc        | 13 ++++---------
- 2 files changed, 4 insertions(+), 22 deletions(-)
+ .../renderer/platform/image-decoders/BUILD.gn  |  8 +-------
+ .../platform/image-decoders/image_decoder.cc   | 18 ++++--------------
+ 2 files changed, 5 insertions(+), 21 deletions(-)
 
 diff --git a/third_party/blink/renderer/platform/image-decoders/BUILD.gn b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
-index 870c7e8537..1b55546ffa 100644
+index e638c6bfcd..2ebd8a23b1 100644
 --- a/third_party/blink/renderer/platform/image-decoders/BUILD.gn
 +++ b/third_party/blink/renderer/platform/image-decoders/BUILD.gn
-@@ -77,15 +77,6 @@ component("image_decoders") {
-     "//ui/gfx/geometry:geometry_skia",
-   ]
- 
--  if (enable_av1_decoder) {
--    sources += [
+@@ -81,12 +81,9 @@ component("image_decoders") {
+     sources += [
+       "avif/avif_image_decoder.cc",
+       "avif/avif_image_decoder.h",
 -      "avif/crabbyavif_image_decoder.cc",
 -      "avif/crabbyavif_image_decoder.h",
--    ]
--
--    deps += [ "//third_party/crabbyavif" ]
--  }
--
-   if (enable_rust_png) {
-     sources += [
-       "png/skia_png_rust_image_decoder.cc",
-@@ -128,8 +119,4 @@ source_set("unit_tests") {
-   if (is_win || is_mac || (is_linux && !is_castos)) {
-     deps += [ "//ui/base:pixel_diff_test_support" ]
+     ]
+ 
+     deps += [
+-      "//third_party/crabbyavif",
+       "//third_party/libavif",
+     ]
    }
--
--  if (enable_av1_decoder) {
--    sources += [ "avif/crabbyavif_image_decoder_test.cc" ]
--  }
+@@ -135,9 +132,6 @@ source_set("unit_tests") {
+   }
+ 
+   if (enable_av1_decoder) {
+-    sources += [
+-      "avif/avif_image_decoder_test.cc",
+-      "avif/crabbyavif_image_decoder_test.cc",
+-    ]
++    sources += [ "avif/avif_image_decoder_test.cc" ]
+   }
  }
 diff --git a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
-index 34c1195414..303669541e 100644
+index 8da7882ca4..b0a9d4d64a 100644
 --- a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 +++ b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 @@ -37,7 +37,6 @@
@@ -58,33 +57,38 @@ index 34c1195414..303669541e 100644
  #include "third_party/blink/public/platform/platform.h"
  #include "third_party/blink/renderer/platform/image-decoders/bmp/bmp_image_decoder.h"
  #include "third_party/blink/renderer/platform/image-decoders/fast_shared_buffer_reader.h"
-@@ -51,10 +50,6 @@
- #include "ui/gfx/geometry/size.h"
- #include "ui/gfx/geometry/size_conversions.h"
+@@ -53,7 +52,6 @@
  
--#if BUILDFLAG(ENABLE_AV1_DECODER)
+ #if BUILDFLAG(ENABLE_AV1_DECODER)
+ #include "third_party/blink/renderer/platform/image-decoders/avif/avif_image_decoder.h"
 -#include "third_party/blink/renderer/platform/image-decoders/avif/crabbyavif_image_decoder.h"
--#endif
--
- namespace blink {
+ #endif
  
- namespace {
-@@ -197,7 +192,7 @@ String SniffMimeTypeInternal(scoped_refptr<SegmentReader> reader) {
+ namespace blink {
+@@ -198,9 +196,7 @@ String SniffMimeTypeInternal(scoped_refptr<SegmentReader> reader) {
      return "image/bmp";
    }
  #if BUILDFLAG(ENABLE_AV1_DECODER)
--  if (CrabbyAVIFImageDecoder::MatchesAVIFSignature(fast_reader)) {
+-  if (base::FeatureList::IsEnabled(blink::features::kCrabbyAvif)
+-          ? CrabbyAVIFImageDecoder::MatchesAVIFSignature(fast_reader)
+-          : AVIFImageDecoder::MatchesAVIFSignature(fast_reader)) {
 +  if (AVIFImageDecoder::MatchesAVIFSignature(fast_reader)) {
      return "image/avif";
    }
  #endif
-@@ -307,9 +302,9 @@ std::unique_ptr<ImageDecoder> ImageDecoder::CreateByMimeType(
+@@ -310,15 +306,9 @@ std::unique_ptr<ImageDecoder> ImageDecoder::CreateByMimeType(
                                                  max_decoded_bytes);
  #if BUILDFLAG(ENABLE_AV1_DECODER)
    } else if (mime_type == "image/avif") {
--    decoder = std::make_unique<CrabbyAVIFImageDecoder>(
--        alpha_option, high_bit_depth_decoding_option, color_behavior, aux_image,
--        max_decoded_bytes, animation_option);
+-    if (base::FeatureList::IsEnabled(blink::features::kCrabbyAvif)) {
+-      decoder = std::make_unique<CrabbyAVIFImageDecoder>(
+-          alpha_option, high_bit_depth_decoding_option, color_behavior,
+-          aux_image, max_decoded_bytes, animation_option);
+-    } else {
+-      decoder = std::make_unique<AVIFImageDecoder>(
+-          alpha_option, high_bit_depth_decoding_option, color_behavior,
+-          aux_image, max_decoded_bytes, animation_option);
+-    }
 +    decoder = std::make_unique<AVIFImageDecoder>(
 +        alpha_option, high_bit_depth_decoding_option, color_behavior,
 +        aux_image, max_decoded_bytes, animation_option);

@@ -1,0 +1,31 @@
+From 84c7c504e8bea65b0b45f3e93b68c1719b47fb9a Mon Sep 17 00:00:00 2001
+From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+Date: Mon, 28 Apr 2025 09:13:23 -0300
+Subject: [PATCH] chrome/browser/compose/compose_session.cc
+
+| ../../chrome/browser/compose/compose_session.cc:553:64: error: alias template 'ModelExecutionSessionCallbackWithLogging' requires template arguments; argument deduction only allowed for class templates
+|   553 |   optimization_guide::ModelExecutionSessionCallbackWithLogging callback =
+|       |                                                                ^
+| ../../components/optimization_guide/core/model_quality/model_execution_logging_wrappers.h:84:1: note: template is declared here
+|    84 | using ModelExecutionSessionCallbackWithLogging =
+|       | ^
+| 1 error generated.
+
+Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+---
+ chrome/browser/compose/compose_session.cc | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/chrome/browser/compose/compose_session.cc b/chrome/browser/compose/compose_session.cc
+index 7e34cd3457..bec8020b97 100644
+--- a/chrome/browser/compose/compose_session.cc
++++ b/chrome/browser/compose/compose_session.cc
+@@ -550,7 +550,7 @@ void ComposeSession::RequestWithSession(
+   // execution in case request fails.
+   compose::LogComposeRequestReason(request_reason);
+ 
+-  optimization_guide::ModelExecutionSessionCallbackWithLogging callback =
++  optimization_guide::ModelExecutionSessionCallbackWithLogging<optimization_guide::proto::ComposeLoggingData> callback =
+       base::BindRepeating(&ComposeSession::ModelExecutionCallback,
+                           weak_ptr_factory_.GetWeakPtr(),
+                           std::move(request_timer), request_id_, request_reason,
