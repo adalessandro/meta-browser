@@ -36,6 +36,8 @@ SRC_URI += "\
     file://0019-Revert-webcodecs-Make-RasterInterface-use-relaxed-at.patch \
     file://0020-Revert-base-Introduce-base-ToValueList-and-base-ToVe.patch \
     file://0021-Revert-CodeHealth-Improve-dictionary-building-in-pri.patch \
+    file://0022-Revert-Disable-crabbyavif-to-fix-build-errors.patch \
+    file://0023-wip.patch \
 "
 # ARM/AArch64-specific patches.
 SRC_URI:append:aarch64 = "${@bb.utils.contains('TUNE_FEATURES', 'crypto', '', ' file://arm/0001-Fix-AES-crypto-SIGILL-on-rpi4-64.patch', d)}"
@@ -300,6 +302,10 @@ GN_ARGS += ' \
 GN_ARGS += ' \
         clang_base_path="${@clang_install_path(d)}" \
         clang_version="latest" \
+'
+
+GN_ARGS += ' \
+        rust_bindgen_root="/usr" \
 '
 
 # This parameter is added by limit-number-of-LTO-jobs.patch with the default value of 8,
