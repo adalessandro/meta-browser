@@ -1,0 +1,50 @@
+From aa76a6a8cf53ddb21a1003407c0ef301fe8d962d Mon Sep 17 00:00:00 2001
+From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+Date: Mon, 28 Apr 2025 01:09:33 -0300
+Subject: [PATCH] wip
+
+Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+---
+ build/rust/rust_bindgen_generator.gni | 2 +-
+ third_party/crabbyavif/BUILD.gn       | 8 ++++++++
+ 2 files changed, 9 insertions(+), 1 deletion(-)
+
+diff --git a/build/rust/rust_bindgen_generator.gni b/build/rust/rust_bindgen_generator.gni
+index c91916be93..e5048241ef 100644
+--- a/build/rust/rust_bindgen_generator.gni
++++ b/build/rust/rust_bindgen_generator.gni
+@@ -18,7 +18,7 @@ if (host_os == "win") {
+ 
+ # On Windows, the libclang.dll is beside the bindgen.exe, otherwise it is in
+ # ../lib.
+-_libclang_path = rust_bindgen_root
++_libclang_path = clang_base_path
+ if (host_os == "win") {
+   _libclang_path += "/bin"
+ } else {
+diff --git a/third_party/crabbyavif/BUILD.gn b/third_party/crabbyavif/BUILD.gn
+index 855e6eac7b..96307870e7 100644
+--- a/third_party/crabbyavif/BUILD.gn
++++ b/third_party/crabbyavif/BUILD.gn
+@@ -13,6 +13,10 @@ rust_bindgen_generator("crabbyavif_dav1d_bindings") {
+   bindgen_flags = [
+     "no-doc-comments",
+     "generate=functions,types,vars,methods,constructors,destructors",
++  ]
++  junk = []
++  not_needed(["junk"])
++  junk = [
+     "allowlist-item=dav1d_close",
+     "allowlist-item=dav1d_data_unref",
+     "allowlist-item=dav1d_data_wrap",
+@@ -42,6 +46,10 @@ rust_bindgen_generator("crabbyavif_libyuv_bindings") {
+   bindgen_flags = [
+     "no-doc-comments",
+     "generate=functions,types,vars,methods,constructors,destructors",
++  ]
++  junk = []
++  not_needed(["junk"])
++  junk = [
+     "allowlist-item=AR30ToAB30",
+     "allowlist-item=ARGBToABGR",
+     "allowlist-item=ARGBAttenuate",
