@@ -295,6 +295,10 @@ GN_ARGS += ' \
         clang_version="latest" \
 '
 
+GN_ARGS += ' \
+        rust_bindgen_root="/usr" \
+'
+
 # This parameter is added by limit-number-of-LTO-jobs.patch with the default value of 8,
 # but we can use whatever user configured in PARALLEL_MAKE
 GN_ARGS += 'max_jobs_per_link="${@oe.utils.parallel_make_argument(d, '%d')}"'
