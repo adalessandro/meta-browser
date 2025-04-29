@@ -1,4 +1,4 @@
-From 4b0bd21ba1a1a6b41a4793635b03eeb4e5a2dc4a Mon Sep 17 00:00:00 2001
+From ba11de0695fc22b91bea40050bf03125be891803 Mon Sep 17 00:00:00 2001
 From: Raphael Kubo da Costa <kubo@igalia.com>
 Date: Wed, 8 Nov 2017 16:43:47 +0100
 Subject: [PATCH] wrapper: extra flags

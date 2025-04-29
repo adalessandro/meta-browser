@@ -1,0 +1,185 @@
+From 5471eebddeda1d0ee190713ac52c76f56b76dcea Mon Sep 17 00:00:00 2001
+From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+Date: Wed, 30 Apr 2025 08:54:09 -0300
+Subject: [PATCH] Revert "Add warning suppression mapping file to the build"
+
+This reverts commit b9f7ffacaa06eb2b1ef1d8f1600845a048ada0d6.
+
+The `warning-suppression-mappings` option flag [0] was added in clang
+21.0 [1], so it's not currently available in our clang setup.
+
+[0] https://clang.llvm.org/docs/WarningSuppressionMappings.html
+[1] https://lists.llvm.org/pipermail/cfe-commits/Week-of-Mon-20241104/639657.html
+
+Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+---
+ .gn                                  |  1 -
+ build/config/BUILDCONFIG.gn          |  1 -
+ build/config/OWNERS                  |  5 -----
+ build/config/clang/clang.gni         | 26 +++++++++-----------------
+ build/config/compiler/BUILD.gn       | 26 --------------------------
+ build/config/siso/clang_all.star     |  4 ----
+ build/config/warning_suppression.txt |  9 ---------
+ 7 files changed, 9 insertions(+), 63 deletions(-)
+ delete mode 100644 build/config/warning_suppression.txt
+
+diff --git a/.gn b/.gn
+index 54d2631ec2..3f65718281 100644
+--- a/.gn
++++ b/.gn
+@@ -74,7 +74,6 @@ default_args = {
+   devtools_visibility = [ "*" ]
+ 
+   clang_unsafe_buffers_paths = "//build/config/unsafe_buffers_paths.txt"
+-  clang_warning_suppression_file = "//build/config/warning_suppression.txt"
+ }
+ 
+ # These are the targets to skip header checking by default. The files in targets
+diff --git a/build/config/BUILDCONFIG.gn b/build/config/BUILDCONFIG.gn
+index a9d2caeb1c..3f3ea354f3 100644
+--- a/build/config/BUILDCONFIG.gn
++++ b/build/config/BUILDCONFIG.gn
+@@ -184,7 +184,6 @@ declare_args() {
+   # Unsafe buffers. Location of file used by plugins to track portions of
+   # the codebase which have been made manifestly safe.
+   clang_unsafe_buffers_paths = ""
+-  clang_warning_suppression_file = ""
+ }
+ 
+ # ==============================================================================
+diff --git a/build/config/OWNERS b/build/config/OWNERS
+index 2dbcc3916d..8a097f03ee 100644
+--- a/build/config/OWNERS
++++ b/build/config/OWNERS
+@@ -5,8 +5,3 @@ per-file cast.gni=file://build/config/chromecast/OWNERS
+ 
+ per-file unsafe_buffers_paths.txt=arthursonzogni@chromium.org
+ per-file unsafe_buffers_paths.txt=tsepez@chromium.org
+-
+-per-file warning_suppression.txt=dloehr@google.com
+-per-file warning_suppression.txt=thakis@chromium.org
+-per-file warning_suppression.txt=hans@chromium.org
+-per-file warning_suppression.txt=tsepez@chromium.org
+diff --git a/build/config/clang/clang.gni b/build/config/clang/clang.gni
+index 2ad331d38f..e120a847c6 100644
+--- a/build/config/clang/clang.gni
++++ b/build/config/clang/clang.gni
+@@ -51,26 +51,18 @@ lld_emit_indexes_and_imports =
+     lld_emit_indexes_and_imports && is_a_target_toolchain
+ 
+ # TODO(crbug.com/326584510): Reclient does not upload `inputs` from C/C++
+-# targets. We work around the bug in Reclient by
+-# specifying the files here.
+-rbe_bug_326584510_missing_input_list = []
++# targets. This file is added to `inputs` for all C targets in
++# //build/config/BUILDCONFIG.gn via //build/config/clang:unsafe_buffers.
++# We work around the bug in Reclient by specifying the file here.
++#
++# This is a comma-delimited list of paths relative to the source tree root. The
++# leading space is important, if the string is non-empty. :)
++rbe_bug_326584510_missing_inputs = ""
+ if (clang_use_chrome_plugins && defined(clang_unsafe_buffers_paths) &&
+     "$clang_unsafe_buffers_paths" != "") {
+   if (rbe_exec_root != rebase_path("//")) {
+     assert(!use_siso, "Can't use non-default rbe_exec_root with siso.")
+   }
+-  rbe_bug_326584510_missing_input_list +=
+-      [ rebase_path(clang_unsafe_buffers_paths, rbe_exec_root) ]
++  from_exec_root = rebase_path(clang_unsafe_buffers_paths, rbe_exec_root)
++  rbe_bug_326584510_missing_inputs = " -inputs=$from_exec_root"
+ }
+-if (defined(clang_warning_suppression_file) &&
+-    "$clang_warning_suppression_file" != "") {
+-  if (rbe_exec_root != rebase_path("//")) {
+-    assert(!use_siso, "Can't use non-default rbe_exec_root with siso.")
+-  }
+-  rbe_bug_326584510_missing_input_list +=
+-      [ rebase_path(clang_warning_suppression_file, rbe_exec_root) ]
+-}
+-
+-# The leading space is important, if the string is non-empty.
+-rbe_bug_326584510_missing_inputs =
+-    " -inputs=" + string_join(",", rbe_bug_326584510_missing_input_list)
+diff --git a/build/config/compiler/BUILD.gn b/build/config/compiler/BUILD.gn
+index 5f7cfb69e9..6f76cc290d 100644
+--- a/build/config/compiler/BUILD.gn
++++ b/build/config/compiler/BUILD.gn
+@@ -312,7 +312,6 @@ config("compiler") {
+     ":compiler_cpu_abi",
+     ":compiler_codegen",
+     ":compiler_deterministic",
+-    ":clang_warning_suppression",
+   ]
+ 
+   # Here we enable -fno-delete-null-pointer-checks, which makes various nullptr
+@@ -1569,31 +1568,6 @@ config("clang_revision") {
+   }
+ }
+ 
+-# Controls the usage of a warning suppression mapping (WSM) file to suppress
+-# warnings based on the path of the file they come from. It's controlled by the
+-# `clang_warning_suppression_file` gn argument , which points to a text file
+-# defining which warnings should be suppressed where.
+-# See //build/config/warning_suppression.txt for an example file; this is the
+-# file used by Chromium.
+-#
+-# To use a different file, or to use this functionality outside of chromium,
+-# set the `clang_warning_suppression_file` argument to point to the new file,
+-# e.g. by setting in the the project's .gn file.
+-config("clang_warning_suppression") {
+-  # Some build configs use older versions of clang that don't support WSMs
+-  if (!is_nacl && default_toolchain != "//build/toolchain/cros:target" &&
+-      !llvm_android_mainline && is_clang &&
+-      clang_warning_suppression_file != "") {
+-    from_build_root =
+-        rebase_path(clang_warning_suppression_file, root_build_dir)
+-    inputs = [ clang_warning_suppression_file ]
+-    cflags = [
+-      "-Xclang",
+-      "--warning-suppression-mappings=" + from_build_root,
+-    ]
+-  }
+-}
+-
+ config("rustc_revision") {
+   if (rustc_revision != "") {
+     # Similar to the above config, this is here so that all files get recompiled
+diff --git a/build/config/siso/clang_all.star b/build/config/siso/clang_all.star
+index ca062f967b..9aea43bd81 100644
+--- a/build/config/siso/clang_all.star
++++ b/build/config/siso/clang_all.star
+@@ -87,19 +87,15 @@ __input_deps = {
+     ],
+     "third_party/llvm-build/Release+Asserts/bin/clang": [
+         "build/config/unsafe_buffers_paths.txt",
+-        "build/config/warning_suppression.txt",
+     ],
+     "third_party/llvm-build/Release+Asserts/bin/clang++": [
+         "build/config/unsafe_buffers_paths.txt",
+-        "build/config/warning_suppression.txt",
+     ],
+     "third_party/llvm-build/Release+Asserts/bin/clang-cl": [
+         "build/config/unsafe_buffers_paths.txt",
+-        "build/config/warning_suppression.txt",
+     ],
+     "third_party/llvm-build/Release+Asserts/bin/clang-cl.exe": [
+         "build/config/unsafe_buffers_paths.txt",
+-        "build/config/warning_suppression.txt",
+     ],
+     "third_party/llvm-build/Release+Asserts/bin/lld-link": [
+         "build/config/c++/libc++.natvis",
+diff --git a/build/config/warning_suppression.txt b/build/config/warning_suppression.txt
+deleted file mode 100644
+index 4f78ea84d3..0000000000
+--- a/build/config/warning_suppression.txt
++++ /dev/null
+@@ -1,9 +0,0 @@
+-# Copyright 2025 The Chromium Project. All rights reserved.
+-# Use of this source code is governed by a BSD-style license that can be
+-# found in the LICENSE file.
+-
+-# Warning suppression mappings are listed here on a per-warning basis.
+-# Upstream docs: https://clang.llvm.org/docs/WarningSuppressionMappings.html
+-# We'll put the policy here too when it's written.
+-# Don't use this file until the policy is written.
+-# See crbug.com/404297941 for more information.

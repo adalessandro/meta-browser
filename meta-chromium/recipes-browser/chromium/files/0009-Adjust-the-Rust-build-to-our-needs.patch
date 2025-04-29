@@ -1,4 +1,4 @@
-From 13e19027d6a471241c344ef38abb2ea1eaff1de1 Mon Sep 17 00:00:00 2001
+From 37574385069f5dfc406b31b07f1e10ab263943ac Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Tue, 16 Jan 2024 12:29:30 +0000
 Subject: [PATCH] Adjust the Rust build to our needs
@@ -16,17 +16,17 @@ Subject: [PATCH] Adjust the Rust build to our needs
 Upstream-Status: Inappropriate [specific to our build setup]
 Signed-off-by: Max Ihlenfeldt <max@igalia.com>
 ---
- build/config/rust.gni            | 26 +++++++++++++++++++-------
+ build/config/rust.gni            | 28 ++++++++++++++++++++--------
  build/rust/rustc_wrapper.py      |  1 +
  build/rust/std/BUILD.gn          | 28 +++++++++++++++++++++-------
  build/rust/std/find_std_rlibs.py | 16 +++++++++++-----
- 4 files changed, 52 insertions(+), 19 deletions(-)
+ 4 files changed, 53 insertions(+), 20 deletions(-)
 
 diff --git a/build/config/rust.gni b/build/config/rust.gni
-index 5b9e3e1e65..2820f026bd 100644
+index 74b3b9ced5..13d21df984 100644
 --- a/build/config/rust.gni
 +++ b/build/config/rust.gni
-@@ -101,6 +101,11 @@ declare_args() {
+@@ -102,6 +102,11 @@ declare_args() {
    # a platform. Mostly applicable to Windows, where new versions can handle ANSI
    # escape sequences but it's not reliable in general.
    force_rustc_color_output = false
@@ -38,7 +38,7 @@ index 5b9e3e1e65..2820f026bd 100644
  }
  
  # Use the Rust toolchain built in-tree. When false, we use the prebuilt Rust
-@@ -173,14 +178,21 @@ if (enable_rust) {
+@@ -174,14 +179,21 @@ if (enable_rust) {
  # https://issues.chromium.org/u/1/issues/372512092#comment5 for an example.
  rust_abi_target = ""
  if (is_linux || is_chromeos) {
@@ -63,12 +63,16 @@ index 5b9e3e1e65..2820f026bd 100644
      cargo_target_abi = ""
    } else if (current_cpu == "arm") {
      if (arm_float_abi == "hard") {
-@@ -190,18 +202,18 @@ if (is_linux || is_chromeos) {
-     }
-     if (arm_arch == "armv7-a" || arm_arch == "armv7") {
-       # No way to inform Rust about the -a suffix.
--      rust_abi_target = "armv7-unknown-linux-gnueabi" + float_suffix
-+      rust_abi_target = "armv7" + vendor + "-linux-gnueabi" + float_suffix
+@@ -201,21 +213,21 @@ if (is_linux || is_chromeos) {
+       # targets in fact target Thumb, see:
+       # https://github.com/rust-lang/rust/issues/44722
+       if (arm_use_neon) {
+-        rust_abi_target = "thumbv7neon-unknown-linux-gnueabi" + float_suffix
++        rust_abi_target = "thumbv7neon" + vendor + "-linux-gnueabi" + float_suffix
+       } else {
+-        rust_abi_target = "armv7-unknown-linux-gnueabi" + float_suffix
++        rust_abi_target = "armv7" + vendor + "-linux-gnueabi" + float_suffix
+       }
        cargo_target_abi = "eabi" + float_suffix
      } else {
 -      rust_abi_target = "arm-unknown-linux-gnueabi" + float_suffix
@@ -82,7 +86,7 @@ index 5b9e3e1e65..2820f026bd 100644
    } else {
      # Best guess for other future platforms.
 -    rust_abi_target = current_cpu + "-unknown-linux-gnu"
-+    rust_abi_target = current_cpu + vendor + "-linux-gnu"
++    rust_abi_target = current_cpu  + vendor + "-linux-gnu"
      cargo_target_abi = ""
    }
  } else if (is_android) {

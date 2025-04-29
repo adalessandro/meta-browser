@@ -1,4 +1,4 @@
-From 2cf2307f1bb86d34175da38791d09a3a5f62078e Mon Sep 17 00:00:00 2001
+From 9aa17b2fc1703ae7101a8140d70cce5719d46ae2 Mon Sep 17 00:00:00 2001
 From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
 Date: Sun, 27 Apr 2025 15:01:56 -0300
 Subject: [PATCH] Revert "Remove libavif based AVIF decoder"
@@ -35,10 +35,10 @@ Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
  create mode 100644 third_party/blink/renderer/platform/image-decoders/avif/gen_crabbyavif_wrapper.py
 
 diff --git a/android_webview/java/src/org/chromium/android_webview/common/ProductionSupportedFlagList.java b/android_webview/java/src/org/chromium/android_webview/common/ProductionSupportedFlagList.java
-index 7cfe226c40..81e4e624e9 100644
+index 4d164c178e..c19b077fdd 100644
 --- a/android_webview/java/src/org/chromium/android_webview/common/ProductionSupportedFlagList.java
 +++ b/android_webview/java/src/org/chromium/android_webview/common/ProductionSupportedFlagList.java
-@@ -435,6 +435,9 @@ public final class ProductionSupportedFlagList {
+@@ -434,6 +434,9 @@ public final class ProductionSupportedFlagList {
          Flag.baseFeature(
                  BaseFeatures.RUN_TASKS_BY_BATCHES,
                  "Run tasks in queue for 8ms before before sending a system message."),
@@ -49,10 +49,10 @@ index 7cfe226c40..81e4e624e9 100644
                  NetworkServiceFeatures.DEPRECATE_UNLOAD,
                  "If false prevents the gradual deprecation of the unload event."),
 diff --git a/chrome/browser/about_flags.cc b/chrome/browser/about_flags.cc
-index a45eaaaff6..6394357810 100644
+index 801120f12d..978ca56d12 100644
 --- a/chrome/browser/about_flags.cc
 +++ b/chrome/browser/about_flags.cc
-@@ -7775,6 +7775,10 @@ const FeatureEntry kFeatureEntries[] = {
+@@ -7776,6 +7776,10 @@ const FeatureEntry kFeatureEntries[] = {
       flag_descriptions::kAvifGainmapHdrImagesDescription, kOsAll,
       FEATURE_VALUE_TYPE(blink::features::kAvifGainmapHdrImages)},
  
@@ -64,10 +64,10 @@ index a45eaaaff6..6394357810 100644
       flag_descriptions::kFileHandlingIconsDescription, kOsDesktop,
       FEATURE_VALUE_TYPE(blink::features::kFileHandlingIcons)},
 diff --git a/chrome/browser/flag-metadata.json b/chrome/browser/flag-metadata.json
-index d42b0ecff4..ea21eb9bef 100644
+index 888225ff2a..81c62c07cb 100644
 --- a/chrome/browser/flag-metadata.json
 +++ b/chrome/browser/flag-metadata.json
-@@ -1623,6 +1623,11 @@
+@@ -1658,6 +1658,11 @@
      "owners": ["sebsg@chromium.org", "bling-transactions-eng@google.com"],
      "expiry_milestone": 135
    },
@@ -80,10 +80,10 @@ index d42b0ecff4..ea21eb9bef 100644
      "name": "cras-processor-wav-dump",
      "owners": ["aaronyu@google.com", "chromeos-audio@google.com" ],
 diff --git a/chrome/browser/flag_descriptions.cc b/chrome/browser/flag_descriptions.cc
-index 00f6ddc0bb..b7f0d78b26 100644
+index c06c6c65b1..1050fe6c31 100644
 --- a/chrome/browser/flag_descriptions.cc
 +++ b/chrome/browser/flag_descriptions.cc
-@@ -419,6 +419,11 @@ const char kAvifGainmapHdrImagesDescription[] =
+@@ -446,6 +446,11 @@ const char kAvifGainmapHdrImagesDescription[] =
      "If enabled, Chrome uses the gainmap (if present) in AVIF images to render "
      "the HDR version on HDR displays and the SDR version on SDR displays.";
  
@@ -96,10 +96,10 @@ index 00f6ddc0bb..b7f0d78b26 100644
  const char kTangibleSyncDescription[] =
      "Enables the tangible sync when a user starts the sync consent flow";
 diff --git a/chrome/browser/flag_descriptions.h b/chrome/browser/flag_descriptions.h
-index 400007dccc..e556d73c89 100644
+index be3f7a6e96..0e4e01f106 100644
 --- a/chrome/browser/flag_descriptions.h
 +++ b/chrome/browser/flag_descriptions.h
-@@ -295,6 +295,9 @@ extern const char kForestFeatureDescription[];
+@@ -312,6 +312,9 @@ extern const char kForestFeatureDescription[];
  extern const char kAvifGainmapHdrImagesName[];
  extern const char kAvifGainmapHdrImagesDescription[];
  
@@ -110,10 +110,10 @@ index 400007dccc..e556d73c89 100644
  extern const char kTangibleSyncDescription[];
  
 diff --git a/third_party/blink/common/features.cc b/third_party/blink/common/features.cc
-index 18e5ae64bc..a54d600699 100644
+index d703564af7..3b44bff4ae 100644
 --- a/third_party/blink/common/features.cc
 +++ b/third_party/blink/common/features.cc
-@@ -498,6 +498,8 @@ BASE_FEATURE(kCorrectFloatExtensionTestForWebGL,
+@@ -510,6 +510,8 @@ BASE_FEATURE(kCorrectFloatExtensionTestForWebGL,
               "CorrectFloatExtensionTestForWebGL",
               base::FEATURE_ENABLED_BY_DEFAULT);
  
@@ -123,10 +123,10 @@ index 18e5ae64bc..a54d600699 100644
  // createImageBitmap, which ignores the image orientation metadata of the source
  // and renders the image as encoded.
 diff --git a/third_party/blink/public/common/features.h b/third_party/blink/public/common/features.h
-index a43e821c5b..8dcd1cbd41 100644
+index 6ef45488e6..505032b2bb 100644
 --- a/third_party/blink/public/common/features.h
 +++ b/third_party/blink/public/common/features.h
-@@ -368,6 +368,9 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
+@@ -366,6 +366,9 @@ BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE_PARAM(
  // See http://crbug.com/40788570.
  BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kDevToolsImprovedNetworkError);
  
@@ -137,10 +137,10 @@ index a43e821c5b..8dcd1cbd41 100644
  // hopping through the IO thread first.
  BLINK_COMMON_EXPORT BASE_DECLARE_FEATURE(kDirectCompositorThreadIpc);
 diff --git a/third_party/blink/renderer/platform/BUILD.gn b/third_party/blink/renderer/platform/BUILD.gn
-index 8546d85128..08ca06f949 100644
+index 291676c658..57505f9d26 100644
 --- a/third_party/blink/renderer/platform/BUILD.gn
 +++ b/third_party/blink/renderer/platform/BUILD.gn
-@@ -2772,6 +2772,19 @@ fuzzer_test("web_icon_sizes_fuzzer") {
+@@ -2786,6 +2786,19 @@ fuzzer_test("web_icon_sizes_fuzzer") {
    additional_configs = [ "//third_party/blink/renderer:inside_blink" ]
  }
  
@@ -3662,7 +3662,7 @@ index 0000000000..82f1c0c3df
 +if __name__ == "__main__":
 +    main()
 diff --git a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
-index 34c1195414..8da7882ca4 100644
+index 0cc5dfa276..0523ccbd18 100644
 --- a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 +++ b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 @@ -52,6 +52,7 @@

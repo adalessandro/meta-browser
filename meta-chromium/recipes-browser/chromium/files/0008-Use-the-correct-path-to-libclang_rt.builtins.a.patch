@@ -1,4 +1,4 @@
-From 8efbb3e495881c0521dc3c6524cba2ee3d17fcd6 Mon Sep 17 00:00:00 2001
+From 097b1eef85865778f99890ef73e5e9bbe43e852f Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Tue, 19 Dec 2023 12:14:05 +0000
 Subject: [PATCH] Use the correct path to libclang_rt.builtins.a
@@ -21,10 +21,10 @@ Signed-off-by: Max Ihlenfeldt <max@igalia.com>
  1 file changed, 5 insertions(+), 4 deletions(-)
 
 diff --git a/build/config/clang/BUILD.gn b/build/config/clang/BUILD.gn
-index 3b561e9b0c..0c1e058370 100644
+index 0d648fa..4652cb5 100644
 --- a/build/config/clang/BUILD.gn
 +++ b/build/config/clang/BUILD.gn
-@@ -198,14 +198,15 @@ template("clang_lib") {
+@@ -199,14 +199,15 @@ template("clang_lib") {
            assert(false)  # Unhandled cpu type
          }
        } else if (is_linux || is_chromeos) {

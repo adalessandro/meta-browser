@@ -1,4 +1,4 @@
-From 26c8df4863ff75a9333abc9b5365ddf189410e4d Mon Sep 17 00:00:00 2001
+From 9b68015a3f3a6c8223a0eddf44f9959722557efc Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Wed, 7 Feb 2024 11:58:30 +0000
 Subject: [PATCH] Don't require profiler_builtins.rlib
