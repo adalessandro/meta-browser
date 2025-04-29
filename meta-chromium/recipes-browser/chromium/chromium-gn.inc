@@ -30,12 +30,12 @@ SRC_URI += "\
     file://0013-pdfium-Fix-missing-PDFiumAPIStringBufferAdapter-temp.patch \
     file://0014-Revert-Connect-the-Rust-log-crate-to-the-base-loggin.patch \
     file://0015-rust-Use-adler-instead-of-adler2.patch \
-    file://0016-Drop-conflicting-RelaxedAtomicWriteMemcpy-references.patch \
-    file://0017-Drop-conflicting-ToValueList-references.patch \
-    file://0018-chrome-compose_session-Fix-missing-template-argument.patch \
-    file://0019-Revert-Remove-libavif-based-AVIF-decoder.patch \
-    file://0020-third_party-libavif-Add-missing-source-files.patch \
-    file://0021-Disable-crabbyavif-to-fix-build-errors.patch \
+    file://0016-chrome-compose_session-Fix-missing-template-argument.patch \
+    file://0017-Revert-Remove-libavif-based-AVIF-decoder.patch \
+    file://0018-third_party-libavif-Add-missing-source-files.patch \
+    file://0019-Disable-crabbyavif-to-fix-build-errors.patch \
+    file://0020-Revert-Add-warning-suppression-mapping-file-to-the-b.patch \
+    file://0021-base-to_value_list-Move-value-instead-of-forwarding.patch \
 "
 # ARM/AArch64-specific patches.
 SRC_URI:append:aarch64 = "${@bb.utils.contains('TUNE_FEATURES', 'crypto', '', ' file://arm/0001-Fix-AES-crypto-SIGILL-on-rpi4-64.patch', d)}"

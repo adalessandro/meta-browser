@@ -1,4 +1,4 @@
-From 1cc1409f3d01915e76408a8b7b7ab062417da28b Mon Sep 17 00:00:00 2001
+From 6aa5c71393b1a25129210ca5921aac9a81a21d6d Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Fri, 22 Mar 2024 10:43:47 +0000
 Subject: [PATCH] Fix "constexpr variable must be initialized by a constant

@@ -1,4 +1,4 @@
-From 8f6222ae9b7b2457aefb2afb4bdbb4651db2899b Mon Sep 17 00:00:00 2001
+From 04dfcb2b2f0e1114aba3f9661ac4c4726af2835f Mon Sep 17 00:00:00 2001
 From: Max Ihlenfeldt <max@igalia.com>
 Date: Mon, 5 Aug 2024 09:33:42 +0000
 Subject: [PATCH] Disable crabbyavif to fix build errors
@@ -46,7 +46,7 @@ index e638c6bfcd..2ebd8a23b1 100644
    }
  }
 diff --git a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
-index 8da7882ca4..b0a9d4d64a 100644
+index 0523ccbd18..222feae952 100644
 --- a/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 +++ b/third_party/blink/renderer/platform/image-decoders/image_decoder.cc
 @@ -37,7 +37,6 @@
