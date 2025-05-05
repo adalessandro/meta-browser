@@ -1,0 +1,136 @@
+From 11737e5c7d1ebb5cc71ef1f3c877aeec2aea31db Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 11 Apr 2025 09:57:46 +0300
+Subject: [PATCH] media/gpu/v4l2: Additional support for mainline linux device
+ paths
+
+---
+ media/gpu/v4l2/v4l2_device.cc                 | 54 +++++++++++++++++++
+ media/gpu/v4l2/v4l2_device.h                  |  1 +
+ media/gpu/v4l2/v4l2_stateful_video_decoder.cc |  5 +-
+ media/gpu/v4l2/v4l2_utils.cc                  |  5 +-
+ 4 files changed, 59 insertions(+), 6 deletions(-)
+
+diff --git a/media/gpu/v4l2/v4l2_device.cc b/media/gpu/v4l2/v4l2_device.cc
+index a12f3d2715..4074461b77 100644
+--- a/media/gpu/v4l2/v4l2_device.cc
++++ b/media/gpu/v4l2/v4l2_device.cc
+@@ -148,6 +148,60 @@ bool V4L2Device::Open(Type type, uint32_t v4l2_pixfmt) {
+   return true;
+ }
+ 
++base::ScopedFD V4L2Device::OpenFDForType(Type type) {
++  DVLOGF(3);
++  base::ScopedFD devfd;
++  auto dev = base::MakeRefCounted<V4L2Device>();
++  std::string path;
++
++  auto is_video_format = [](uint32_t fmt) {
++    return fmt == V4L2_PIX_FMT_H264 || fmt == V4L2_PIX_FMT_VP8 ||
++           fmt == V4L2_PIX_FMT_VP9 || fmt == V4L2_PIX_FMT_HEVC ||
++           fmt == V4L2_PIX_FMT_AV1;
++  };
++  auto is_jpeg_format = [](uint32_t fmt) { return fmt == V4L2_PIX_FMT_JPEG; };
++
++  const auto& devices = dev->GetDevicesForType(type);
++
++  for (const auto& d : devices) {
++    switch (type) {
++      case Type::kDecoder:
++      case Type::kEncoder:
++        if (std::any_of(d.second.begin(), d.second.end(), is_video_format)) {
++          path = d.first;
++        }
++        break;
++      case Type::kJpegDecoder:
++      case Type::kJpegEncoder:
++        if (std::any_of(d.second.begin(), d.second.end(), is_jpeg_format)) {
++          path = d.first;
++        }
++        break;
++      case Type::kImageProcessor:
++        if (std::all_of(d.second.begin(), d.second.end(), [&](uint32_t fmt) {
++              return !is_video_format(fmt) && !is_jpeg_format(fmt);
++            })) {
++          path = d.first;
++        }
++        break;
++    }
++    if (!path.empty()) {
++      break;
++    }
++  }
++
++  if (!path.empty()) {
++    devfd.reset(
++        HANDLE_EINTR(open(path.c_str(), O_RDWR | O_NONBLOCK | O_CLOEXEC)));
++    VLOGF(3) << "Using device " << path
++             << " for type: " << static_cast<int>(type);
++  } else {
++    VLOGF(1) << "No devices for type: " << static_cast<int>(type);
++  }
++
++  return devfd;
++}
++
+ bool V4L2Device::IsValid() {
+   return device_poll_interrupt_fd_.is_valid();
+ }
+diff --git a/media/gpu/v4l2/v4l2_device.h b/media/gpu/v4l2/v4l2_device.h
+index 210bf4a0ba..c644cf3ef5 100644
+--- a/media/gpu/v4l2/v4l2_device.h
++++ b/media/gpu/v4l2/v4l2_device.h
+@@ -94,6 +94,7 @@ class MEDIA_GPU_EXPORT V4L2Device
+   // Return true on success.
+   // The device will be closed in the destructor.
+   [[nodiscard]] bool Open(Type type, uint32_t v4l2_pixfmt);
++  static base::ScopedFD OpenFDForType(Type type);
+ 
+   // Returns whether Open() has been succeeded.
+   bool IsValid();
+diff --git a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+index fccba4205b..300d2e2338 100644
+--- a/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
++++ b/media/gpu/v4l2/v4l2_stateful_video_decoder.cc
+@@ -30,6 +30,7 @@
+ #include "media/base/media_switches.h"
+ #include "media/gpu/chromeos/video_frame_resource.h"
+ #include "media/gpu/macros.h"
++#include "media/gpu/v4l2/v4l2_device.h"
+ #include "media/gpu/v4l2/v4l2_framerate_control.h"
+ #include "media/gpu/v4l2/v4l2_queue.h"
+ #include "media/gpu/v4l2/v4l2_utils.h"
+@@ -314,9 +315,7 @@ void V4L2StatefulVideoDecoder::Initialize(const VideoDecoderConfig& config,
+   }
+ 
+   if (!device_fd_.is_valid()) {
+-    constexpr char kVideoDeviceDriverPath[] = "/dev/video-dec0";
+-    device_fd_.reset(HANDLE_EINTR(
+-        open(kVideoDeviceDriverPath, O_RDWR | O_NONBLOCK | O_CLOEXEC)));
++    device_fd_ = V4L2Device::OpenFDForType(V4L2Device::Type::kDecoder);
+     if (!device_fd_.is_valid()) {
+       std::move(init_cb).Run(DecoderStatus::Codes::kFailedToCreateDecoder);
+       return;
+diff --git a/media/gpu/v4l2/v4l2_utils.cc b/media/gpu/v4l2/v4l2_utils.cc
+index c8b65c28f1..082cb76da9 100644
+--- a/media/gpu/v4l2/v4l2_utils.cc
++++ b/media/gpu/v4l2/v4l2_utils.cc
+@@ -29,6 +29,7 @@
+ #include "media/base/video_types.h"
+ #include "media/gpu/chromeos/fourcc.h"
+ #include "media/gpu/macros.h"
++#include "media/gpu/v4l2/v4l2_device.h"
+ #include "media/media_buildflags.h"
+ #include "ui/gfx/geometry/size.h"
+ 
+@@ -631,9 +632,7 @@ std::optional<SupportedVideoDecoderConfigs> GetSupportedV4L2DecoderConfigs() {
+ }
+ 
+ bool IsV4L2DecoderStateful() {
+-  constexpr char kVideoDeviceDriverPath[] = "/dev/video-dec0";
+-  base::ScopedFD device_fd(HANDLE_EINTR(
+-      open(kVideoDeviceDriverPath, O_RDWR | O_NONBLOCK | O_CLOEXEC)));
++  auto device_fd = V4L2Device::OpenFDForType(V4L2Device::Type::kDecoder);
+   if (!device_fd.is_valid()) {
+     return false;
+   }

@@ -1,0 +1,50 @@
+From a04c4afa7f152077930bc436bae6e417728ff087 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 11 Apr 2025 09:59:51 +0300
+Subject: [PATCH] media: Enable v4l2 decoding and encoding features by default
+
+---
+ media/base/media_switches.cc                       | 6 +++---
+ media/mojo/services/gpu_mojo_media_client_linux.cc | 2 +-
+ 2 files changed, 4 insertions(+), 4 deletions(-)
+
+diff --git a/media/base/media_switches.cc b/media/base/media_switches.cc
+index da77bedca7..ef23ee2b09 100644
+--- a/media/base/media_switches.cc
++++ b/media/base/media_switches.cc
+@@ -705,7 +705,7 @@ BASE_FEATURE(kUnifiedAutoplay,
+ // on chromeos, but needs an experiment on linux.
+ BASE_FEATURE(kAcceleratedVideoDecodeLinux,
+              "AcceleratedVideoDecoder",
+-#if BUILDFLAG(USE_VAAPI)
++#if BUILDFLAG(USE_VAAPI) || BUILDFLAG(USE_V4L2_CODEC)
+              base::FEATURE_ENABLED_BY_DEFAULT);
+ #else
+              base::FEATURE_DISABLED_BY_DEFAULT);
+@@ -713,11 +713,11 @@ BASE_FEATURE(kAcceleratedVideoDecodeLinux,
+ 
+ BASE_FEATURE(kAcceleratedVideoDecodeLinuxGL,
+              "AcceleratedVideoDecodeLinuxGL",
+-             base::FEATURE_DISABLED_BY_DEFAULT);
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ BASE_FEATURE(kAcceleratedVideoEncodeLinux,
+              "AcceleratedVideoEncoder",
+-             base::FEATURE_DISABLED_BY_DEFAULT);
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ // Ignore the non-intel driver blacklist for VaapiVideoDecoder implementations.
+ // Intended for manual usage only in order to gague the status of newer driver
+diff --git a/media/mojo/services/gpu_mojo_media_client_linux.cc b/media/mojo/services/gpu_mojo_media_client_linux.cc
+index 9de6a3decf..fe8d00c3c1 100644
+--- a/media/mojo/services/gpu_mojo_media_client_linux.cc
++++ b/media/mojo/services/gpu_mojo_media_client_linux.cc
+@@ -22,7 +22,7 @@ namespace {
+ 
+ BASE_FEATURE(kAcceleratedVideoDecodeLinuxZeroCopyGL,
+              "AcceleratedVideoDecodeLinuxZeroCopyGL",
+-             base::FEATURE_DISABLED_BY_DEFAULT);
++             base::FEATURE_ENABLED_BY_DEFAULT);
+ 
+ VideoDecoderType GetPreferredLinuxDecoderImplementation() {
+   // VaapiVideoDecoder flag is required for VaapiVideoDecoder.

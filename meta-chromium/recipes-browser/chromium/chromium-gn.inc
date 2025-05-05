@@ -37,6 +37,20 @@ SRC_URI += "\
     file://0020-Revert-Add-warning-suppression-mapping-file-to-the-b.patch \
     file://0021-base-to_value_list-Move-value-instead-of-forwarding.patch \
 "
+
+# STM patches.
+SRC_URI += "\
+    file://stm/0001-media-gpu-v4l2-Fix-unsafe-buffer-compile-errors.patch \
+    file://stm/0002-media-gpu-v4l2-Additional-support-for-mainline-linux.patch \
+    file://stm/0003-media-gpu-Enable-v4l2-encoding-support-on-Linux.patch \
+    file://stm/0004-blink-renderer-Allow-VBR-mode-on-CBR-only-encoders-f.patch \
+    file://stm/0005-media-gpu-v4l2-Use-proper-image-width-for-v4l2-encod.patch \
+    file://stm/0006-media-Enable-v4l2-decoding-and-encoding-features-by-.patch \
+    file://stm/0007-media-gpu-Fix-DCHECK-failure.patch \
+    file://stm/0008-ozone-wayland-Force-LINEAR-modifier-for-scanout-buff.patch \
+    file://stm/0009-ozone-wayland-Use-the-display-DRM-node-to-allocate-s.patch \
+"
+
 # ARM/AArch64-specific patches.
 SRC_URI:append:aarch64 = "${@bb.utils.contains('TUNE_FEATURES', 'crypto', '', ' file://arm/0001-Fix-AES-crypto-SIGILL-on-rpi4-64.patch', d)}"
 

@@ -1,0 +1,53 @@
+From d8645b81cdd5dfbdb6fef7bb2dd3fd9d850a6e5c Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 11 Apr 2025 09:58:07 +0300
+Subject: [PATCH] media/gpu: Enable v4l2 encoding support on Linux
+
+v4l2 encoding is currently enable only on ChromeOS because it depends on
+ChromeOS specific v4l2 driver behavior to handle some kinds of dmabufs
+(crbug.com/901264). For many use cases, though, dmabufs are not even
+used by default (e.g., webrtc), so enable this to take advantage of
+accelerated encoding for many common cases.
+---
+ media/gpu/gpu_video_encode_accelerator_factory.cc | 2 +-
+ media/gpu/v4l2/BUILD.gn                           | 7 ++-----
+ 2 files changed, 3 insertions(+), 6 deletions(-)
+
+diff --git a/media/gpu/gpu_video_encode_accelerator_factory.cc b/media/gpu/gpu_video_encode_accelerator_factory.cc
+index df7a4bbd79..457618189e 100644
+--- a/media/gpu/gpu_video_encode_accelerator_factory.cc
++++ b/media/gpu/gpu_video_encode_accelerator_factory.cc
+@@ -57,7 +57,7 @@ namespace media {
+ namespace {
+ #if BUILDFLAG(USE_V4L2_CODEC)
+ std::unique_ptr<VideoEncodeAccelerator> CreateV4L2VEA() {
+-#if BUILDFLAG(IS_CHROMEOS)
++#if BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_LINUX)
+   // TODO(crbug.com/901264): Encoders use hack for passing offset within
+   // a DMA-buf, which is not supported upstream.
+   return base::WrapUnique<VideoEncodeAccelerator>(
+diff --git a/media/gpu/v4l2/BUILD.gn b/media/gpu/v4l2/BUILD.gn
+index 43bcf03798..fc3a6d3acf 100644
+--- a/media/gpu/v4l2/BUILD.gn
++++ b/media/gpu/v4l2/BUILD.gn
+@@ -50,6 +50,8 @@ source_set("v4l2") {
+     "v4l2_video_decoder_delegate_vp8.h",
+     "v4l2_video_decoder_delegate_vp9.cc",
+     "v4l2_video_decoder_delegate_vp9.h",
++    "v4l2_video_encode_accelerator.cc",
++    "v4l2_video_encode_accelerator.h",
+     "v4l2_vp9_helpers.cc",
+     "v4l2_vp9_helpers.h",
+   ]
+@@ -74,11 +76,6 @@ source_set("v4l2") {
+       # AV1 delegate depends on header files only in ChromeOS SDK
+       "v4l2_video_decoder_delegate_av1.cc",
+       "v4l2_video_decoder_delegate_av1.h",
+-
+-      # TODO(crbug.com/901264): Encoders use hack for passing offset
+-      # within a DMA-buf, which is not supported upstream.
+-      "v4l2_video_encode_accelerator.cc",
+-      "v4l2_video_encode_accelerator.h",
+     ]
+   }
+ 

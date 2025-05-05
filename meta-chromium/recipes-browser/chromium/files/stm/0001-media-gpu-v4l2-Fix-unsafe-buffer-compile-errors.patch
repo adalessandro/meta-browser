@@ -1,0 +1,78 @@
+From dd984bfd73b006cb2a4ffe93a2da525a93273bb4 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Thu, 3 Apr 2025 10:05:41 +0300
+Subject: [PATCH] media/gpu/v4l2: Fix unsafe buffer compile errors
+
+---
+ media/gpu/v4l2/mt21/mt21_decompressor.cc          | 2 +-
+ media/gpu/v4l2/mt21/mt21_decompressor_unittest.cc | 2 +-
+ media/gpu/v4l2/mt21/mt21_util.h                   | 2 +-
+ media/gpu/v4l2/mt21/mt21_util_unittest.cc         | 2 +-
+ media/gpu/v4l2/v4l2_video_encode_accelerator.cc   | 2 +-
+ 5 files changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/media/gpu/v4l2/mt21/mt21_decompressor.cc b/media/gpu/v4l2/mt21/mt21_decompressor.cc
+index eb87e26d37..42b56f2114 100644
+--- a/media/gpu/v4l2/mt21/mt21_decompressor.cc
++++ b/media/gpu/v4l2/mt21/mt21_decompressor.cc
+@@ -4,7 +4,7 @@
+ 
+ #ifdef UNSAFE_BUFFERS_BUILD
+ // TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+-#pragma allow_unsafe_libc_calls
++#pragma allow_unsafe_buffers
+ #endif
+ 
+ #include "media/gpu/v4l2/mt21/mt21_decompressor.h"
+diff --git a/media/gpu/v4l2/mt21/mt21_decompressor_unittest.cc b/media/gpu/v4l2/mt21/mt21_decompressor_unittest.cc
+index 62ce42403a..87e5080163 100644
+--- a/media/gpu/v4l2/mt21/mt21_decompressor_unittest.cc
++++ b/media/gpu/v4l2/mt21/mt21_decompressor_unittest.cc
+@@ -4,7 +4,7 @@
+ 
+ #ifdef UNSAFE_BUFFERS_BUILD
+ // TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+-#pragma allow_unsafe_libc_calls
++#pragma allow_unsafe_buffers
+ #endif
+ 
+ #include "build/build_config.h"
+diff --git a/media/gpu/v4l2/mt21/mt21_util.h b/media/gpu/v4l2/mt21/mt21_util.h
+index 53073752e4..2a121db3a8 100644
+--- a/media/gpu/v4l2/mt21/mt21_util.h
++++ b/media/gpu/v4l2/mt21/mt21_util.h
+@@ -4,7 +4,7 @@
+ 
+ #ifdef UNSAFE_BUFFERS_BUILD
+ // TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+-#pragma allow_unsafe_libc_calls
++#pragma allow_unsafe_buffers
+ #endif
+ 
+ #ifndef MEDIA_GPU_V4L2_MT21_MT21_UTIL_H_
+diff --git a/media/gpu/v4l2/mt21/mt21_util_unittest.cc b/media/gpu/v4l2/mt21/mt21_util_unittest.cc
+index bbd43d6f06..fc9230ab6b 100644
+--- a/media/gpu/v4l2/mt21/mt21_util_unittest.cc
++++ b/media/gpu/v4l2/mt21/mt21_util_unittest.cc
+@@ -4,7 +4,7 @@
+ 
+ #ifdef UNSAFE_BUFFERS_BUILD
+ // TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+-#pragma allow_unsafe_libc_calls
++#pragma allow_unsafe_buffers
+ #endif
+ 
+ #include "build/build_config.h"
+diff --git a/media/gpu/v4l2/v4l2_video_encode_accelerator.cc b/media/gpu/v4l2/v4l2_video_encode_accelerator.cc
+index b1c62dffa0..32a0319c9d 100644
+--- a/media/gpu/v4l2/v4l2_video_encode_accelerator.cc
++++ b/media/gpu/v4l2/v4l2_video_encode_accelerator.cc
+@@ -4,7 +4,7 @@
+ 
+ #ifdef UNSAFE_BUFFERS_BUILD
+ // TODO(crbug.com/390223051): Remove C-library calls to fix the errors.
+-#pragma allow_unsafe_libc_calls
++#pragma allow_unsafe_buffers
+ #endif
+ 
+ #include "media/gpu/v4l2/v4l2_video_encode_accelerator.h"

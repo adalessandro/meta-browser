@@ -1,0 +1,391 @@
+From a5e69911064faf0502b66fe4c0eb965a65b4ac96 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Wed, 9 Apr 2025 11:10:58 +0300
+Subject: [PATCH] ozone/wayland: Use the display DRM node to allocate scanout
+ buffers
+
+This is required in order for the compositor to be able to import
+the dmabuf and place it on a hardware plane.
+---
+ ui/gfx/linux/gbm_wrapper.cc                   | 17 ++++++
+ .../common/drm_render_node_path_finder.cc     | 28 ++++++----
+ .../common/drm_render_node_path_finder.h      |  4 +-
+ .../wayland/gpu/gbm_pixmap_wayland.cc         | 23 ++++++--
+ .../wayland/gpu/wayland_buffer_manager_gpu.cc | 55 +++++++++++++++----
+ .../wayland/gpu/wayland_buffer_manager_gpu.h  | 10 +++-
+ .../wayland/ozone_platform_wayland.cc         | 15 +++--
+ 7 files changed, 116 insertions(+), 36 deletions(-)
+
+diff --git a/ui/gfx/linux/gbm_wrapper.cc b/ui/gfx/linux/gbm_wrapper.cc
+index 1b5d52cbb3..d0b74b66b2 100644
+--- a/ui/gfx/linux/gbm_wrapper.cc
++++ b/ui/gfx/linux/gbm_wrapper.cc
+@@ -284,6 +284,8 @@ class Device final : public ui::GbmDevice {
+   std::unique_ptr<ui::GbmBuffer> CreateBuffer(uint32_t format,
+                                               const gfx::Size& size,
+                                               uint32_t flags) override {
++    DVLOG(3) << "size=" << size.ToString() << " format=0x" << std::hex << format
++             << " flags=0x" << flags;
+     struct gbm_bo* bo = gbm_bo_create(device_.get(), size.width(),
+                                       size.height(), format, flags);
+     if (!bo) {
+@@ -300,6 +302,12 @@ class Device final : public ui::GbmDevice {
+       return nullptr;
+     }
+ 
++    if (bo) {
++      DVLOG(3) << "created size=" << gbm_bo_get_width(bo) << "x"
++               << gbm_bo_get_height(bo) << " format=0x" << std::hex
++               << gbm_bo_get_format(bo) << " mod=0x" << gbm_bo_get_modifier(bo);
++    }
++
+     return CreateBufferForBO(bo, format, size, flags);
+   }
+ 
+@@ -312,6 +320,9 @@ class Device final : public ui::GbmDevice {
+       return CreateBuffer(format, requested_size, flags);
+     }
+ 
++    DVLOG(3) << "size=" << requested_size.ToString() << " format=0x" << std::hex
++             << format << " flags=0x" << flags;
++
+     // Buggy drivers prevent us from getting plane FDs from a BO which had its
+     // previously imported BO destroyed. E.g: Nvidia. Thus, on Linux Desktop, we
+     // do the create/import modifiers validation loop below using a separate set
+@@ -381,6 +392,12 @@ class Device final : public ui::GbmDevice {
+       PLOG_IF(ERROR, !created_bo) << "Failed to create BO with modifiers.";
+     }
+ 
++    if (created_bo) {
++      DVLOG(3) << "created size=" << gbm_bo_get_width(created_bo) << "x"
++               << gbm_bo_get_height(created_bo) << " format=0x" << std::hex
++               << gbm_bo_get_format(created_bo) << " mod=0x"
++               << gbm_bo_get_modifier(created_bo);
++    }
+     // TODO(327768768): Add a test for this about size.
+     return created_bo
+                ? CreateBufferForBO(created_bo, format, requested_size, flags)
+diff --git a/ui/ozone/platform/wayland/common/drm_render_node_path_finder.cc b/ui/ozone/platform/wayland/common/drm_render_node_path_finder.cc
+index 2fca3836b0..dcdadfbc5e 100644
+--- a/ui/ozone/platform/wayland/common/drm_render_node_path_finder.cc
++++ b/ui/ozone/platform/wayland/common/drm_render_node_path_finder.cc
+@@ -26,7 +26,10 @@
+ namespace ui {
+ 
+ DrmRenderNodePathFinder::DrmRenderNodePathFinder() {
+-  FindDrmRenderNodePath();
++  drm_render_node_path_ = FindDrmNodePath(DRM_NODE_RENDER);
++  drm_display_node_path_ = FindDrmNodePath(DRM_NODE_PRIMARY);
++  DVLOG(3) << "render=" << drm_render_node_path_
++           << " display=" << drm_display_node_path_;
+ }
+ 
+ DrmRenderNodePathFinder::~DrmRenderNodePathFinder() = default;
+@@ -35,36 +38,40 @@ base::FilePath DrmRenderNodePathFinder::GetDrmRenderNodePath() const {
+   return drm_render_node_path_;
+ }
+ 
+-void DrmRenderNodePathFinder::FindDrmRenderNodePath() {
++base::FilePath DrmRenderNodePathFinder::GetDrmDisplayNodePath() const {
++  return drm_display_node_path_;
++}
++
++base::FilePath DrmRenderNodePathFinder::FindDrmNodePath(int type) {
+   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
+           switches::kRenderNodeOverride)) {
+     drm_render_node_path_ =
+         base::CommandLine::ForCurrentProcess()->GetSwitchValuePath(
+             switches::kRenderNodeOverride);
+-    return;
++    return {};
+   }
+ 
+   int max_devices = drmGetDevices2(0, nullptr, 0);
+   if (max_devices <= 0) {
+     PLOG(ERROR) << "drmGetDevices2() has not found any devices";
+-    return;
++    return {};
+   }
+ 
+   std::vector<drmDevicePtr> devices{static_cast<size_t>(max_devices), nullptr};
+   int ret = drmGetDevices2(0, devices.data(), max_devices);
+   if (ret < 0) {
+     PLOG(ERROR) << "drmGetDevices2() returned an error";
+-    return;
++    return {};
+   }
+ 
+   std::vector<std::pair<std::string, std::string>> driver_to_nodes;
+   for (const auto& device : devices) {
+-    if (!device || !(device->available_nodes & 1 << DRM_NODE_RENDER)) {
++    if (!device || !(device->available_nodes & 1 << type)) {
+       continue;
+     }
+ 
+     CHECK(device->nodes);
+-    const std::string dri_render_node(device->nodes[DRM_NODE_RENDER]);
++    const std::string dri_render_node(device->nodes[type]);
+     base::ScopedFD drm_fd(open(dri_render_node.c_str(), O_RDWR));
+     if (drm_fd.get() < 0) {
+       continue;
+@@ -97,7 +104,7 @@ void DrmRenderNodePathFinder::FindDrmRenderNodePath() {
+   devices.clear();
+ 
+   if (driver_to_nodes.empty()) {
+-    return;
++    return {};
+   }
+ 
+   static constexpr const char* preferred_drivers[3] = {"i915", "amdgpu",
+@@ -105,15 +112,14 @@ void DrmRenderNodePathFinder::FindDrmRenderNodePath() {
+   for (const char* preferred_driver : preferred_drivers) {
+     for (const auto& [driver, node] : driver_to_nodes) {
+       if (driver == preferred_driver) {
+-        drm_render_node_path_ = base::FilePath(node);
+-        return;
++        return base::FilePath(node);
+       }
+     }
+   }
+ 
+   LOG(WARNING) << "Preferred drm_render_node not found, picking "
+                << driver_to_nodes[0].first;
+-  drm_render_node_path_ = base::FilePath(driver_to_nodes[0].second);
++  return base::FilePath(driver_to_nodes[0].second);
+ }
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/wayland/common/drm_render_node_path_finder.h b/ui/ozone/platform/wayland/common/drm_render_node_path_finder.h
+index 28873c1f30..ccfe5f673c 100644
+--- a/ui/ozone/platform/wayland/common/drm_render_node_path_finder.h
++++ b/ui/ozone/platform/wayland/common/drm_render_node_path_finder.h
+@@ -22,11 +22,13 @@ class DrmRenderNodePathFinder {
+ 
+   // Returns a path to a drm render node device.
+   base::FilePath GetDrmRenderNodePath() const;
++  base::FilePath GetDrmDisplayNodePath() const;
+ 
+  private:
+-  void FindDrmRenderNodePath();
++  base::FilePath FindDrmNodePath(int type);
+ 
+   base::FilePath drm_render_node_path_;
++  base::FilePath drm_display_node_path_;
+ };
+ 
+ }  // namespace ui
+diff --git a/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc b/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
+index 3db447187e..e67680924b 100644
+--- a/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
++++ b/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
+@@ -50,14 +50,26 @@ bool GbmPixmapWayland::InitializeBuffer(
+ 
+   widget_ = widget;
+ 
+-  auto* gbm_device = buffer_manager_->GetGbmDevice();
+-  if (!gbm_device)
+-    return false;
+-
+   const uint32_t fourcc_format = GetFourCCFormatFromBufferFormat(format);
+   const uint32_t gbm_flags = ui::BufferUsageToGbmFlags(usage);
+   auto modifiers = buffer_manager_->GetModifiersForBufferFormat(format);
+ 
++  GbmDevice* gbm_device = nullptr;
++
++  if (gbm_flags & GBM_BO_USE_SCANOUT) {
++    gbm_device = buffer_manager_->GetGbmDisplayDevice();
++  }
++  if (!gbm_device) {
++    gbm_device = buffer_manager_->GetGbmDevice();
++    DVLOG(3) << "Using render device";
++  } else {
++    DVLOG(3) << "Using display device";
++  }
++
++  if (!gbm_device) {
++    return false;
++  }
++
+   // Create buffer object without format modifiers unless they are explicitly
+   // advertised by the Wayland compositor, via linux-dmabuf protocol.
+   if (modifiers.empty()) {
+@@ -70,8 +82,7 @@ bool GbmPixmapWayland::InitializeBuffer(
+     // should not be mixed with frame buffer compression. Until we have a
+     // mechanism for determine which modifiers produce artifacts we should
+     // default |DRM_FORMAT_MOD_LINEAR| here.
+-    if (gbm_flags & GBM_BO_USE_LINEAR ||
+-        gbm_flags & GBM_BO_USE_SCANOUT ||
++    if (gbm_flags & GBM_BO_USE_LINEAR || gbm_flags & GBM_BO_USE_SCANOUT ||
+         gbm_flags & GBM_BO_USE_FRONT_RENDERING) {
+       modifiers = {DRM_FORMAT_MOD_LINEAR};
+     }
+diff --git a/ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.cc b/ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.cc
+index a27ed664ac..a468722153 100644
+--- a/ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.cc
++++ b/ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.cc
+@@ -30,15 +30,17 @@
+ namespace ui {
+ 
+ WaylandBufferManagerGpu::WaylandBufferManagerGpu()
+-    : WaylandBufferManagerGpu(base::FilePath()) {}
++    : WaylandBufferManagerGpu(base::FilePath(), base::FilePath()) {}
+ 
+ WaylandBufferManagerGpu::WaylandBufferManagerGpu(
+-    const base::FilePath& drm_node_path) {
++    const base::FilePath& drm_render_node_path,
++    const base::FilePath& drm_display_node_path) {
+ #if defined(WAYLAND_GBM)
+   // The path_finder and the handle do syscalls, which are permitted before
+   // the sandbox entry. After the gpu enters the sandbox, they fail. Thus,
+   // we get node path from the platform instance and get a handle for that here.
+-  OpenAndStoreDrmRenderNodeFd(drm_node_path);
++  drm_render_node_fd_ = OpenDrmNodeFd(drm_render_node_path);
++  drm_display_node_fd_ = OpenDrmNodeFd(drm_display_node_path);
+ #endif
+ 
+   // The WaylandBufferManagerGpu takes the task runner where it was created.
+@@ -325,8 +327,9 @@ GbmDevice* WaylandBufferManagerGpu::GetGbmDevice() {
+     return nullptr;
+   }
+ 
+-  if (gbm_device_ || use_fake_gbm_device_for_test_)
+-    return gbm_device_.get();
++  if (gbm_render_device_ || use_fake_gbm_device_for_test_) {
++    return gbm_render_device_.get();
++  }
+ 
+   if (!drm_render_node_fd_.is_valid()) {
+     supports_dmabuf_ = false;
+@@ -334,13 +337,43 @@ GbmDevice* WaylandBufferManagerGpu::GetGbmDevice() {
+   }
+ 
+   GPU_STARTUP_TRACE_EVENT("ui::CreateGbmDevice");
+-  gbm_device_ = CreateGbmDevice(drm_render_node_fd_.get());
+-  if (!gbm_device_) {
++  gbm_render_device_ = CreateGbmDevice(drm_render_node_fd_.get());
++  if (!gbm_render_device_) {
+     supports_dmabuf_ = false;
+     LOG(WARNING) << "Failed to initialize gbm device.";
+     return nullptr;
+   }
+-  return gbm_device_.get();
++  return gbm_render_device_.get();
++}
++
++GbmDevice* WaylandBufferManagerGpu::GetGbmDisplayDevice() {
++  // Wayland won't support wl_drm or zwp_linux_dmabuf without this extension.
++  if (!supports_dmabuf_ || (!gl::GLSurfaceEGL::GetGLDisplayEGL()
++                                 ->ext->b_EGL_EXT_image_dma_buf_import &&
++                            !use_fake_gbm_device_for_test_)) {
++    supports_dmabuf_ = false;
++    return nullptr;
++  }
++
++  if (use_fake_gbm_device_for_test_) {
++    return nullptr;
++  }
++
++  if (gbm_display_device_ || use_fake_gbm_device_for_test_) {
++    return gbm_display_device_.get();
++  }
++
++  if (!drm_display_node_fd_.is_valid()) {
++    return nullptr;
++  }
++
++  GPU_STARTUP_TRACE_EVENT("ui::CreateGbmDevice");
++  gbm_display_device_ = CreateGbmDevice(drm_display_node_fd_.get());
++  if (!gbm_display_device_) {
++    LOG(WARNING) << "Failed to initialize gbm display device.";
++    return nullptr;
++  }
++  return gbm_display_device_.get();
+ }
+ #endif  // defined(WAYLAND_GBM)
+ 
+@@ -441,15 +474,15 @@ void WaylandBufferManagerGpu::HandlePresentationOnOriginThread(
+ }
+ 
+ #if defined(WAYLAND_GBM)
+-void WaylandBufferManagerGpu::OpenAndStoreDrmRenderNodeFd(
++base::ScopedFD WaylandBufferManagerGpu::OpenDrmNodeFd(
+     const base::FilePath& drm_node_path) {
+   DrmRenderNodeHandle handle;
+   if (drm_node_path.empty() || !handle.Initialize(drm_node_path)) {
+     LOG(WARNING) << "Failed to initialize drm render node handle.";
+-    return;
++    return {};
+   }
+ 
+-  drm_render_node_fd_ = handle.PassFD();
++  return handle.PassFD();
+ }
+ #endif
+ 
+diff --git a/ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h b/ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h
+index 199873a0cd..1da98ea3c1 100644
+--- a/ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h
++++ b/ui/ozone/platform/wayland/gpu/wayland_buffer_manager_gpu.h
+@@ -45,7 +45,8 @@ class WaylandWindow;
+ class WaylandBufferManagerGpu : public ozone::mojom::WaylandBufferManagerGpu {
+  public:
+   WaylandBufferManagerGpu();
+-  explicit WaylandBufferManagerGpu(const base::FilePath& drm_node_path);
++  WaylandBufferManagerGpu(const base::FilePath& drm_node_path,
++                          const base::FilePath& display_node_path);
+   WaylandBufferManagerGpu(const WaylandBufferManagerGpu&) = delete;
+   WaylandBufferManagerGpu& operator=(const WaylandBufferManagerGpu&) = delete;
+ 
+@@ -149,6 +150,7 @@ class WaylandBufferManagerGpu : public ozone::mojom::WaylandBufferManagerGpu {
+ #if defined(WAYLAND_GBM)
+   // Returns a gbm_device based on a DRM render node.
+   GbmDevice* GetGbmDevice();
++  GbmDevice* GetGbmDisplayDevice();
+ #endif
+ 
+   bool supports_acquire_fence() const { return supports_acquire_fence_; }
+@@ -241,11 +243,13 @@ class WaylandBufferManagerGpu : public ozone::mojom::WaylandBufferManagerGpu {
+ #if defined(WAYLAND_GBM)
+   // Uses |drm_node_path| to open the handle and store it into
+   // |drm_render_node_fd|.
+-  void OpenAndStoreDrmRenderNodeFd(const base::FilePath& drm_node_path);
++  base::ScopedFD OpenDrmNodeFd(const base::FilePath& drm_node_path);
+   // Used by the gbm_device for self creation.
+   base::ScopedFD drm_render_node_fd_;
++  base::ScopedFD drm_display_node_fd_;
+   // A DRM render node based gbm device.
+-  std::unique_ptr<GbmDevice> gbm_device_;
++  std::unique_ptr<GbmDevice> gbm_render_device_;
++  std::unique_ptr<GbmDevice> gbm_display_device_;
+   // When set, avoids creating a real gbm_device. Instead, tests that set
+   // this variable to true must set own instance of the GbmDevice. See the
+   // CreateSurfaceCheckGbm for example.
+diff --git a/ui/ozone/platform/wayland/ozone_platform_wayland.cc b/ui/ozone/platform/wayland/ozone_platform_wayland.cc
+index d871f6911f..896eb8bcdf 100644
+--- a/ui/ozone/platform/wayland/ozone_platform_wayland.cc
++++ b/ui/ozone/platform/wayland/ozone_platform_wayland.cc
+@@ -313,13 +313,20 @@ class OzonePlatformWayland : public OzonePlatform,
+   }
+ 
+   void InitializeGPU(const InitParams& args) override {
+-    base::FilePath drm_node_path;
++    base::FilePath drm_render_node_path;
++    base::FilePath drm_display_node_path;
+ #if defined(WAYLAND_GBM)
+-    drm_node_path = path_finder_.GetDrmRenderNodePath();
+-    if (drm_node_path.empty())
++    drm_render_node_path = path_finder_.GetDrmRenderNodePath();
++    if (drm_render_node_path.empty()) {
+       LOG(WARNING) << "Failed to find drm render node path.";
++    }
++    drm_display_node_path = path_finder_.GetDrmDisplayNodePath();
++    if (drm_display_node_path.empty()) {
++      LOG(WARNING) << "Failed to find drm display node path.";
++    }
+ #endif
+-    buffer_manager_ = std::make_unique<WaylandBufferManagerGpu>(drm_node_path);
++    buffer_manager_ = std::make_unique<WaylandBufferManagerGpu>(
++        drm_render_node_path, drm_display_node_path);
+     surface_factory_ = std::make_unique<WaylandSurfaceFactory>(
+         connection_.get(), buffer_manager_.get());
+     overlay_manager_ =

@@ -1,0 +1,24 @@
+From 4218fee8deac45788ee9c4733684b6a1d05ef0e6 Mon Sep 17 00:00:00 2001
+From: Alexandros Frantzis <alexandros.frantzis@collabora.com>
+Date: Fri, 11 Apr 2025 10:00:32 +0300
+Subject: [PATCH] ozone/wayland: Force LINEAR modifier for scanout buffers
+
+The hardware is only able to scan out buffers with the
+LINEAR modifier, so force the modifier to give the best chance
+of scanning out such buffers.
+---
+ ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc b/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
+index bc7d1c77c8..3db447187e 100644
+--- a/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
++++ b/ui/ozone/platform/wayland/gpu/gbm_pixmap_wayland.cc
+@@ -71,6 +71,7 @@ bool GbmPixmapWayland::InitializeBuffer(
+     // mechanism for determine which modifiers produce artifacts we should
+     // default |DRM_FORMAT_MOD_LINEAR| here.
+     if (gbm_flags & GBM_BO_USE_LINEAR ||
++        gbm_flags & GBM_BO_USE_SCANOUT ||
+         gbm_flags & GBM_BO_USE_FRONT_RENDERING) {
+       modifiers = {DRM_FORMAT_MOD_LINEAR};
+     }
