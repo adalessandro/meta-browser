@@ -37,6 +37,7 @@ SRC_URI += "\
     file://0020-Revert-Add-warning-suppression-mapping-file-to-the-b.patch \
     file://0021-base-to_value_list-Move-value-instead-of-forwarding.patch \
     file://0022-Revert-rust-Broader-dependency-on-build-rust-allocat.patch \
+    file://0023-third_party-node-update_node_binaries-NodeJS-v22.15..patch \
 "
 # ARM/AArch64-specific patches.
 SRC_URI:append:aarch64 = "${@bb.utils.contains('TUNE_FEATURES', 'crypto', '', ' file://arm/0001-Fix-AES-crypto-SIGILL-on-rpi4-64.patch', d)}"
