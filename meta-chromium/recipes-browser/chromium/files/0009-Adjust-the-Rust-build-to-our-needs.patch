@@ -16,14 +16,14 @@ Subject: [PATCH] Adjust the Rust build to our needs
 Upstream-Status: Inappropriate [specific to our build setup]
 Signed-off-by: Max Ihlenfeldt <max@igalia.com>
 ---
- build/config/rust.gni            | 34 +++++++++++++++++++++-----------
+ build/config/rust.gni            | 47 ++++++++++++++++----------------
  build/rust/rustc_wrapper.py      |  1 +
- build/rust/std/BUILD.gn          | 28 +++++++++++++++++++-------
- build/rust/std/find_std_rlibs.py | 16 ++++++++++-----
- 4 files changed, 56 insertions(+), 23 deletions(-)
+ build/rust/std/BUILD.gn          | 28 ++++++++++++++-----
+ build/rust/std/find_std_rlibs.py | 16 +++++++----
+ 4 files changed, 56 insertions(+), 36 deletions(-)
 
 diff --git a/build/config/rust.gni b/build/config/rust.gni
-index bd18d13119..40ea470b57 100644
+index bd18d13119058..b65744c03b11e 100644
 --- a/build/config/rust.gni
 +++ b/build/config/rust.gni
 @@ -95,6 +95,11 @@ declare_args() {
@@ -102,8 +102,28 @@ index bd18d13119..40ea470b57 100644
      cargo_target_abi = ""
    }
  } else if (is_android) {
+@@ -375,19 +387,6 @@ if (is_linux || is_chromeos) {
+ 
+ if (toolchain_has_rust) {
+   assert(rust_abi_target != "")
+-
+-  _known_rust_target_triples_filepath = "//build/rust/known-target-triples.txt"
+-  _is_rust_abi_target_a_known_triple = false
+-  _known_rust_target_triples_ =
+-      read_file(_known_rust_target_triples_filepath, "list lines")
+-  foreach(_known_triple, _known_rust_target_triples_) {
+-    if (_known_triple == rust_abi_target) {
+-      _is_rust_abi_target_a_known_triple = true
+-    }
+-  }
+-  assert(_is_rust_abi_target_a_known_triple,
+-         "`${rust_abi_target}` needs to be added to " +
+-             "`//${_known_rust_target_triples_filepath}`")
+ }
+ 
+ # This variable is passed to the Rust libstd build.
 diff --git a/build/rust/rustc_wrapper.py b/build/rust/rustc_wrapper.py
-index 8f2096dfe5..de43d44eed 100755
+index 8f2096dfe5e09..de43d44eed840 100755
 --- a/build/rust/rustc_wrapper.py
 +++ b/build/rust/rustc_wrapper.py
 @@ -160,6 +160,7 @@ def main():
@@ -115,7 +135,7 @@ index 8f2096dfe5..de43d44eed 100755
    abs_build_root = os.getcwd().replace('\\', '/') + '/'
    is_windows = sys.platform == 'win32' or args.target_windows
 diff --git a/build/rust/std/BUILD.gn b/build/rust/std/BUILD.gn
-index bb2c988452..fdddf68d46 100644
+index bb2c9884520b3..fdddf68d46923 100644
 --- a/build/rust/std/BUILD.gn
 +++ b/build/rust/std/BUILD.gn
 @@ -168,7 +168,8 @@ if (toolchain_has_rust) {
@@ -178,7 +198,7 @@ index bb2c988452..fdddf68d46 100644
    }
  }
 diff --git a/build/rust/std/find_std_rlibs.py b/build/rust/std/find_std_rlibs.py
-index 386258f890..e8fdaa904a 100755
+index 386258f890c01..e8fdaa904ac82 100755
 --- a/build/rust/std/find_std_rlibs.py
 +++ b/build/rust/std/find_std_rlibs.py
 @@ -17,7 +17,7 @@ import re
