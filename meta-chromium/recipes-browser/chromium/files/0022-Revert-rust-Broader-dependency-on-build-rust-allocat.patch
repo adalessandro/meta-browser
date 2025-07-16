@@ -1,0 +1,337 @@
+From 1761a7e331c909536c935fc5947841d7a996c35c Mon Sep 17 00:00:00 2001
+From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+Date: Wed, 16 Jul 2025 12:36:19 -0300
+Subject: [PATCH] Revert "[rust] Broader dependency on
+ `//build/rust/allocator`."
+
+This reverts commit ecdd28a15dfd184c9190d36d2609a308677743f0.
+
+Upstream-Status: Pending
+Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+---
+ build/rust/allocator/BUILD.gn               | 52 +++++++--------------
+ build/rust/allocator/allocator_impls.h      |  2 +-
+ build/rust/allocator/allocator_impls_ffi.rs | 19 ++++++++
+ build/rust/allocator/lib.rs                 | 17 +++++--
+ build/rust/cargo_crate.gni                  | 19 ++------
+ build/rust/rust_bindgen.gni                 | 16 -------
+ services/on_device_model/ml/BUILD.gn        |  5 +-
+ third_party/breakpad/BUILD.gn               | 10 +++-
+ tools/clang/scripts/compiler_inputs_size.py |  2 +-
+ 9 files changed, 69 insertions(+), 73 deletions(-)
+ create mode 100644 build/rust/allocator/allocator_impls_ffi.rs
+
+diff --git a/build/rust/allocator/BUILD.gn b/build/rust/allocator/BUILD.gn
+index 23cdbf004757f..ba3d32618c556 100644
+--- a/build/rust/allocator/BUILD.gn
++++ b/build/rust/allocator/BUILD.gn
+@@ -4,7 +4,6 @@
+ 
+ import("//build/buildflag_header.gni")
+ import("//build/config/rust.gni")
+-import("//build/rust/rust_bindgen.gni")
+ import("//build/rust/rust_static_library.gni")
+ 
+ rust_allocator_uses_partition_alloc = false
+@@ -45,68 +44,51 @@ buildflag_header("buildflags") {
+ 
+ if (toolchain_has_rust) {
+   # All targets which depend on Rust code but are not linked by rustc must
+-  # depend on this. Usually, this dependency will come from a `rust_target` or
+-  # `cargo_crate` GN template, but note that this may be overridden by setting
+-  # `no_allocator_crate` of `rust_static_library` or `no_std` of `cargo_crate`.
++  # depend on this. Usually, this dependency will come from the rust_target() GN
++  # template. However, cargo_crate() does *not* include this dependency so any
++  # C++ targets which directly depend on a cargo_crate() must depend on this.
+   rust_static_library("allocator") {
+     sources = [ "lib.rs" ]
+     crate_root = "lib.rs"
++    cxx_bindings = [ "lib.rs" ]
+ 
+-    rustflags = []
+-    deps = [ ":alloc_error_handler_impl_ffi" ]
++    deps = [ ":alloc_error_handler_impl" ]
+     if (rust_allocator_uses_allocator_impls_h) {
+-      deps += [ ":allocator_impls_ffi" ]
+-      rustflags += [ "--cfg=rust_allocator_uses_allocator_impls_h" ]
++      deps += [ ":allocator_impls" ]
+     }
+ 
+-    # Avoid cyclic dependencies:
+     no_chromium_prelude = true
+     no_allocator_crate = true
+-
+-    # Allow `unsafe` for FFI calls:
+     allow_unsafe = true
+ 
++    rustflags = []
++    if (rust_allocator_uses_allocator_impls_h) {
++      rustflags += [ "--cfg=rust_allocator_uses_allocator_impls_h" ]
++      cxx_bindings += [ "allocator_impls_ffi.rs" ]
++      sources += [ "allocator_impls_ffi.rs" ]
++    }
++
+     # TODO(https://crbug.com/410596442): Stop using unstable features here.
+     configs -= [ "//build/config/compiler:disallow_unstable_features" ]
+   }
+ 
+   if (rust_allocator_uses_allocator_impls_h) {
+-    rust_bindgen("allocator_impls_ffi") {
+-      deps = [ ":allocator_impls" ]
+-      header = "allocator_impls.h"
+-      cpp = true
+-      visibility = [ ":*" ]
+-
+-      # Giving an explicit `crate_name`, because `allocator` target needs to
+-      # set `no_chromium_prelude` and cannot import mangled crate names.
+-      crate_name = "allocator_impls_ffi"
+-    }
+-
+     static_library("allocator_impls") {
+-      deps = [ ":buildflags" ]
++      public_deps = []
+       if (rust_allocator_uses_partition_alloc) {
+-        deps += [ "//base/allocator/partition_allocator:partition_alloc" ]
++        public_deps +=
++            [ "//base/allocator/partition_allocator:partition_alloc" ]
+       }
+ 
+       sources = [
+         "allocator_impls.cc",
+         "allocator_impls.h",
+       ]
++      deps = [ ":buildflags" ]
+       visibility = [ ":*" ]
+     }
+   }
+ 
+-  rust_bindgen("alloc_error_handler_impl_ffi") {
+-    deps = [ ":alloc_error_handler_impl" ]
+-    header = "alloc_error_handler_impl.h"
+-    cpp = true
+-    visibility = [ ":*" ]
+-
+-    # Giving an explicit `crate_name`, because `allocator` target needs to
+-    # set `no_chromium_prelude` and cannot import mangled crate names.
+-    crate_name = "alloc_error_handler_impl_ffi"
+-  }
+-
+   static_library("alloc_error_handler_impl") {
+     sources = [
+       # `alias.*`, `compiler_specific.h`, and `immediate_crash.*` have been
+diff --git a/build/rust/allocator/allocator_impls.h b/build/rust/allocator/allocator_impls.h
+index d50d32415beae..3ccd5f07a617e 100644
+--- a/build/rust/allocator/allocator_impls.h
++++ b/build/rust/allocator/allocator_impls.h
+@@ -5,7 +5,7 @@
+ #ifndef BUILD_RUST_ALLOCATOR_ALLOCATOR_IMPLS_H_
+ #define BUILD_RUST_ALLOCATOR_ALLOCATOR_IMPLS_H_
+ 
+-#include <stddef.h>
++#include <cstddef>
+ 
+ // This header exposes a C++ allocator (e.g. PartitionAlloc) to Rust.
+ // The APIs below are called from `impl GlobalAlloc` in `lib.rs`.
+diff --git a/build/rust/allocator/allocator_impls_ffi.rs b/build/rust/allocator/allocator_impls_ffi.rs
+new file mode 100644
+index 0000000000000..3b5e2220a22a5
+--- /dev/null
++++ b/build/rust/allocator/allocator_impls_ffi.rs
+@@ -0,0 +1,19 @@
++// Copyright 2025 The Chromium Authors
++// Use of this source code is governed by a BSD-style license that can be
++// found in the LICENSE file.
++
++//! FFI for `allocator_impls.h` is in a separate `.rs` file/module to
++//! better support conditional compilation (these functions are only
++//! used under `#[cfg(rust_allocator_uses_allocator_impls_h)]`.
++
++#[cxx::bridge(namespace = "rust_allocator_internal")]
++pub mod ffi {
++    extern "C++" {
++        include!("build/rust/allocator/allocator_impls.h");
++
++        unsafe fn alloc(size: usize, align: usize) -> *mut u8;
++        unsafe fn dealloc(p: *mut u8, size: usize, align: usize);
++        unsafe fn realloc(p: *mut u8, old_size: usize, align: usize, new_size: usize) -> *mut u8;
++        unsafe fn alloc_zeroed(size: usize, align: usize) -> *mut u8;
++    }
++}
+diff --git a/build/rust/allocator/lib.rs b/build/rust/allocator/lib.rs
+index c49d424922435..e61671f6ed6c4 100644
+--- a/build/rust/allocator/lib.rs
++++ b/build/rust/allocator/lib.rs
+@@ -26,11 +26,16 @@
+ #![allow(internal_features)]
+ #![feature(rustc_attrs)]
+ 
++// This module is in a separate source file to avoid having to teach `cxxbridge`
++// about conditional compilation.
++#[cfg(rust_allocator_uses_allocator_impls_h)]
++mod allocator_impls_ffi;
++
+ /// Module that provides `#[global_allocator]` / `GlobalAlloc` interface for
+ /// using an allocator from C++.
+ #[cfg(rust_allocator_uses_allocator_impls_h)]
+ mod cpp_allocator {
+-    use allocator_impls_ffi::rust_allocator_internal as ffi;
++    use super::allocator_impls_ffi::ffi;
+     use std::alloc::{GlobalAlloc, Layout};
+ 
+     struct Allocator;
+@@ -81,8 +86,6 @@ mod rust_allocator {
+ ///
+ /// TODO(https://crbug.com/410596442): Stop using internal features here.
+ mod both_allocators {
+-    use alloc_error_handler_impl_ffi::rust_allocator_internal as ffi;
+-
+     /// As part of rustc's contract for using `#[global_allocator]` without
+     /// rustc-generated shims we must define this symbol, since we are opting in
+     /// to unstable functionality. See https://github.com/rust-lang/rust/issues/123015
+@@ -105,4 +108,12 @@ mod both_allocators {
+         // (Not really _needed_, but it could simplify code a little bit.)
+         unsafe { ffi::alloc_error_handler_impl() }
+     }
++
++    #[cxx::bridge(namespace = "rust_allocator_internal")]
++    mod ffi {
++        extern "C++" {
++            include!("build/rust/allocator/alloc_error_handler_impl.h");
++            unsafe fn alloc_error_handler_impl();
++        }
++    }
+ }
+diff --git a/build/rust/cargo_crate.gni b/build/rust/cargo_crate.gni
+index 0e73b546b38bf..9f8d789cf9b00 100644
+--- a/build/rust/cargo_crate.gni
++++ b/build/rust/cargo_crate.gni
+@@ -267,20 +267,11 @@ template("cargo_crate") {
+       # Don't import the `chromium` crate into third-party code.
+       no_chromium_prelude = true
+ 
+-      # Depend by default on the `//build/rust/allocator` library, but avoid this
+-      # dependency in `no_std` mode.  This is desirable for two reasons:
+-      # 1. It gives users of `cargo_crate` an indirect way to control presence of
+-      #    this dependency.
+-      # 2. More importantly, it avoid cyclic dependencies like the one below:
+-      #       //build/rust/allocator:allocator ->
+-      #       ...
+-      #       //build/rust/std:std ->
+-      #       //build/rust/std/rules:addr2line (or another stdlib crate) ->
+-      #       //build/rust/allocator:allocator
+-      no_allocator_crate = false
+-      if (defined(invoker.no_std) && invoker.no_std) {
+-        no_allocator_crate = true
+-      }
++      # Don't depend on the chrome-specific #[global_allocator] crate from
++      # third-party code. This avoids some dependency cycle issues. The allocator
++      # crate will still be used if it exists anywhere in the dependency graph for
++      # a given linked artifact.
++      no_allocator_crate = true
+ 
+       rustc_metadata = _rustc_metadata
+ 
+diff --git a/build/rust/rust_bindgen.gni b/build/rust/rust_bindgen.gni
+index 87028d78ce3da..f046534073863 100644
+--- a/build/rust/rust_bindgen.gni
++++ b/build/rust/rust_bindgen.gni
+@@ -59,11 +59,6 @@ if (host_os == "win") {
+ #   build. Additionally, `get_target_outputs` will return both the Rust file and
+ #   a generated C file, but callers can rely on the Rust file being first.
+ #
+-# crate_name: (optional)
+-#   If set, then specified the name of the auto-generated crate, so that it
+-#   doesn't need to be imported using `chromium::import!` macro.  This should
+-#   be used sparingly - typically only in low-level, foundational libraries
+-#   that cannot depend on Chromium prelude (such as `//build/rust/allocator`).
+ #
+ # For a small, self-contained example please see:
+ # * C header: //build/rust/tests/bindgen_test
+@@ -75,9 +70,6 @@ template("rust_bindgen") {
+   if (defined(invoker.wrap_static_fns) && invoker.wrap_static_fns) {
+     _wrap_static_fns = true
+   }
+-  if (defined(invoker.crate_name)) {
+-    _crate_name = invoker.crate_name
+-  }
+   rust_bindgen_generator(_rust_bindgen_generator_name) {
+     forward_variables_from(invoker,
+                            "*",
+@@ -104,9 +96,6 @@ template("rust_bindgen") {
+                                  "cpp",
+                                ])
+ 
+-    if (defined(_crate_name)) {
+-      crate_name = _crate_name
+-    }
+     crate_root = "//build/rust/bindings.rs"
+     sources = [ crate_root ]
+     bindgen_deps = [ ":$_rust_bindgen_generator_name" ]
+@@ -129,10 +118,5 @@ template("rust_bindgen") {
+         "cpp",
+       ]
+     }
+-
+-    # The generated crate doesn't need these dependencies.
+-    # And avoiding them avoids dependency cycles.
+-    no_allocator_crate = true
+-    no_chromium_prelude = true
+   }
+ }
+diff --git a/services/on_device_model/ml/BUILD.gn b/services/on_device_model/ml/BUILD.gn
+index 8cad5eb62037a..04f597e9fd503 100644
+--- a/services/on_device_model/ml/BUILD.gn
++++ b/services/on_device_model/ml/BUILD.gn
+@@ -71,7 +71,10 @@ if (use_blink || (is_ios && build_with_internal_optimization_guide)) {
+     ]
+     if (enable_constraints) {
+       defines += [ "ENABLE_ON_DEVICE_CONSTRAINTS" ]
+-      deps += [ "//third_party/rust/llguidance/v0_7:lib" ]
++      deps += [
++        "//build/rust/allocator",
++        "//third_party/rust/llguidance/v0_7:lib",
++      ]
+     }
+     if (use_blink) {
+       deps += [ "//gpu/config" ]
+diff --git a/third_party/breakpad/BUILD.gn b/third_party/breakpad/BUILD.gn
+index 2f4e1ab015660..e140ecbedcc9a 100644
+--- a/third_party/breakpad/BUILD.gn
++++ b/third_party/breakpad/BUILD.gn
+@@ -495,7 +495,10 @@ if (is_mac) {
+       defines = [ "HAVE_MACH_O_NLIST_H" ]
+ 
+       # Rust demangle support.
+-      deps = [ "//third_party/rust/rustc_demangle_capi/v0_1:lib" ]
++      deps = [
++        "//build/rust/allocator",
++        "//third_party/rust/rustc_demangle_capi/v0_1:lib",
++      ]
+       defines += [ "HAVE_RUSTC_DEMANGLE" ]
+       include_dirs += [ "//third_party/rust/chromium_crates_io/vendor/rustc-demangle-capi-v0_1/include" ]
+       sources += [ "//third_party/rust/chromium_crates_io/vendor/rustc-demangle-capi-v0_1/include/rustc_demangle.h" ]
+@@ -743,7 +746,10 @@ if (is_linux || is_chromeos || is_android) {
+       include_dirs = [ "breakpad/src" ]
+ 
+       # Rust demangle support.
+-      deps = [ "//third_party/rust/rustc_demangle_capi/v0_1:lib" ]
++      deps = [
++        "//build/rust/allocator",
++        "//third_party/rust/rustc_demangle_capi/v0_1:lib",
++      ]
+       defines += [ "HAVE_RUSTC_DEMANGLE" ]
+       include_dirs += [ "//third_party/rust/chromium_crates_io/vendor/rustc-demangle-capi-v0_1/include" ]
+       sources += [ "//third_party/rust/chromium_crates_io/vendor/rustc-demangle-capi-v0_1/include/rustc_demangle.h" ]
+diff --git a/tools/clang/scripts/compiler_inputs_size.py b/tools/clang/scripts/compiler_inputs_size.py
+index aabe29ad25ea8..f0e1aa9926493 100755
+--- a/tools/clang/scripts/compiler_inputs_size.py
++++ b/tools/clang/scripts/compiler_inputs_size.py
+@@ -180,7 +180,7 @@ def parse_commands(build_dir, commands_output):
+   ...  'clang-cl.exe /Fobaz.o /c baz.cc\n'.splitlines(keepends=True)))
+   ['bar.c', 'dir1/dir2/baz.cc', 'foo.cc']
+   """
+-  COMPILE_RE = re.compile(r'.*\bclang\b.* [/-]c (\S+)')
++  COMPILE_RE = re.compile(r'.*clang.* [/-]c (\S+)')
+   files = set()
+   for line in commands_output:
+     m = COMPILE_RE.match(line)
