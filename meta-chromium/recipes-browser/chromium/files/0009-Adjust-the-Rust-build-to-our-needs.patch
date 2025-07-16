@@ -16,17 +16,17 @@ Subject: [PATCH] Adjust the Rust build to our needs
 Upstream-Status: Inappropriate [specific to our build setup]
 Signed-off-by: Max Ihlenfeldt <max@igalia.com>
 ---
- build/config/rust.gni            | 28 ++++++++++++++++++++--------
+ build/config/rust.gni            | 34 +++++++++++++++++++++-----------
  build/rust/rustc_wrapper.py      |  1 +
- build/rust/std/BUILD.gn          | 28 +++++++++++++++++++++-------
- build/rust/std/find_std_rlibs.py | 16 +++++++++++-----
- 4 files changed, 53 insertions(+), 20 deletions(-)
+ build/rust/std/BUILD.gn          | 28 +++++++++++++++++++-------
+ build/rust/std/find_std_rlibs.py | 16 ++++++++++-----
+ 4 files changed, 56 insertions(+), 23 deletions(-)
 
 diff --git a/build/config/rust.gni b/build/config/rust.gni
-index 74b3b9ced5..13d21df984 100644
+index bd18d13119..40ea470b57 100644
 --- a/build/config/rust.gni
 +++ b/build/config/rust.gni
-@@ -102,6 +102,11 @@ declare_args() {
+@@ -95,6 +95,11 @@ declare_args() {
    # a platform. Mostly applicable to Windows, where new versions can handle ANSI
    # escape sequences but it's not reliable in general.
    force_rustc_color_output = false
@@ -37,8 +37,8 @@ index 74b3b9ced5..13d21df984 100644
 +  rust_target_triple_vendor_for_target = ""
  }
  
- # Use the Rust toolchain built in-tree. When false, we use the prebuilt Rust
-@@ -174,14 +179,21 @@ if (enable_rust) {
+ declare_args() {
+@@ -187,14 +192,21 @@ if (enable_rust) {
  # https://issues.chromium.org/u/1/issues/372512092#comment5 for an example.
  rust_abi_target = ""
  if (is_linux || is_chromeos) {
@@ -63,7 +63,7 @@ index 74b3b9ced5..13d21df984 100644
      cargo_target_abi = ""
    } else if (current_cpu == "arm") {
      if (arm_float_abi == "hard") {
-@@ -201,21 +213,21 @@ if (is_linux || is_chromeos) {
+@@ -214,30 +226,30 @@ if (is_linux || is_chromeos) {
        # targets in fact target Thumb, see:
        # https://github.com/rust-lang/rust/issues/44722
        if (arm_use_neon) {
@@ -82,6 +82,18 @@ index 74b3b9ced5..13d21df984 100644
    } else if (current_cpu == "riscv64") {
 -    rust_abi_target = "riscv64gc-unknown-linux-gnu"
 +    rust_abi_target = "riscv64gc" + vendor + "-linux-gnu"
+     cargo_target_abi = ""
+   } else if (current_cpu == "ppc64") {
+-    rust_abi_target = "powerpc64le-unknown-linux-gnu"
++    rust_abi_target = "powerpc64le" + vendor + "-linux-gnu"
+     cargo_target_abi = ""
+   } else if (current_cpu == "s390x") {
+-    rust_abi_target = "s390x-unknown-linux-gnu"
++    rust_abi_target = "s390x" + vendor + "-linux-gnu"
+     cargo_target_abi = ""
+   } else if (current_cpu == "loong64") {
+-    rust_abi_target = "loongarch64-unknown-linux-gnu"
++    rust_abi_target = "loongarch64" + vendor + "-linux-gnu"
      cargo_target_abi = ""
    } else {
      # Best guess for other future platforms.
@@ -103,10 +115,10 @@ index 8f2096dfe5..de43d44eed 100755
    abs_build_root = os.getcwd().replace('\\', '/') + '/'
    is_windows = sys.platform == 'win32' or args.target_windows
 diff --git a/build/rust/std/BUILD.gn b/build/rust/std/BUILD.gn
-index 6b996aa1fe..146f6633ce 100644
+index bb2c988452..fdddf68d46 100644
 --- a/build/rust/std/BUILD.gn
 +++ b/build/rust/std/BUILD.gn
-@@ -207,7 +207,8 @@ if (toolchain_has_rust) {
+@@ -168,7 +168,8 @@ if (toolchain_has_rust) {
    # our locally-built std. Both reside in root_out_dir: we must only have one of
    # each per GN toolchain anyway.
  
@@ -116,7 +128,7 @@ index 6b996aa1fe..146f6633ce 100644
  
    if (!rust_prebuilt_stdlib) {
      local_rustc_sysroot = "$root_out_dir/local_rustc_sysroot"
-@@ -336,12 +337,12 @@ if (toolchain_has_rust) {
+@@ -295,12 +296,12 @@ if (toolchain_has_rust) {
          rust_abi_target,
        ]
  
@@ -132,7 +144,7 @@ index 6b996aa1fe..146f6633ce 100644
        }
  
        visibility = [ ":*" ]
-@@ -354,8 +355,18 @@ if (toolchain_has_rust) {
+@@ -313,8 +314,18 @@ if (toolchain_has_rust) {
                   "enable_rust=false")
        deps = [ ":find_stdlib" ]
        sources = get_target_outputs(":find_stdlib")
@@ -153,7 +165,7 @@ index 6b996aa1fe..146f6633ce 100644
  
        visibility = [ ":*" ]
      }
-@@ -395,7 +406,10 @@ if (toolchain_has_rust) {
+@@ -354,7 +365,10 @@ if (toolchain_has_rust) {
          ":prebuilt_stdlib_libs",
          ":stdlib_public_dependent_libs",
        ]
@@ -162,9 +174,9 @@ index 6b996aa1fe..146f6633ce 100644
 +        ":prebuilt_rustc_copy_to_sysroot",
 +        ":prebuilt_rustc_copy_target_json_to_sysroot",
 +      ]
- 
-       # The host builds tools toolchain supports Rust only and does not use
-       # the allocator remapping to point it to PartitionAlloc.
+     }
+   }
+ }
 diff --git a/build/rust/std/find_std_rlibs.py b/build/rust/std/find_std_rlibs.py
 index 386258f890..e8fdaa904a 100755
 --- a/build/rust/std/find_std_rlibs.py

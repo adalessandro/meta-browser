@@ -25,7 +25,7 @@ builds.
 Upstream-Status: Inappropriate [specific to our build setup]
 Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
 ---
- base/BUILD.gn                                 |  47 --------
+ base/BUILD.gn                                 |  64 ----------
  base/logging.cc                               |   9 --
  base/logging/rust_log_integration.cc          |  36 ------
  base/logging/rust_log_integration.h           |  52 --------
@@ -33,9 +33,9 @@ Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
  base/logging/rust_logger.rs                   | 112 ------------------
  base/test/BUILD.gn                            |  13 --
  .../test/logging/test_rust_logger_consumer.rs |  41 -------
- .../rust/chromium_crates_io/gnrt_config.toml  |   1 +
+ .../rust/chromium_crates_io/gnrt_config.toml  |   5 +-
  third_party/rust/log/v0_4/BUILD.gn            |   2 +
- 10 files changed, 3 insertions(+), 386 deletions(-)
+ 10 files changed, 5 insertions(+), 405 deletions(-)
  delete mode 100644 base/logging/rust_log_integration.cc
  delete mode 100644 base/logging/rust_log_integration.h
  delete mode 100644 base/logging/rust_log_integration_unittest.cc
@@ -43,7 +43,7 @@ Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
  delete mode 100644 base/test/logging/test_rust_logger_consumer.rs
 
 diff --git a/base/BUILD.gn b/base/BUILD.gn
-index 99b58f1bba..408bb8c0a0 100644
+index 2925aa607e..929734f381 100644
 --- a/base/BUILD.gn
 +++ b/base/BUILD.gn
 @@ -36,8 +36,6 @@ import("//build/config/sanitizers/sanitizers.gni")
@@ -52,10 +52,10 @@ index 99b58f1bba..408bb8c0a0 100644
  import("//build/nocompile.gni")
 -import("//build/rust/rust_bindgen.gni")
 -import("//build/rust/rust_static_library.gni")
- import("//build/timestamp.gni")
  import("//build/util/process_version.gni")
  import("//build_overrides/build.gni")
-@@ -1045,9 +1043,7 @@ component("base") {
+ import("//testing/libfuzzer/fuzzer_test.gni")
+@@ -1053,9 +1051,7 @@ component("base") {
      # Used by metrics/crc32, except on NaCl builds.
      deps += [ "//third_party/zlib" ]
  
@@ -65,7 +65,7 @@ index 99b58f1bba..408bb8c0a0 100644
        "//third_party/rust/serde_json_lenient/v0_2/wrapper",
      ]
    }
-@@ -1581,8 +1577,6 @@ component("base") {
+@@ -1600,8 +1596,6 @@ component("base") {
        "files/scoped_temp_file.h",
        "json/json_file_value_serializer.cc",
        "json/json_file_value_serializer.h",
@@ -74,7 +74,7 @@ index 99b58f1bba..408bb8c0a0 100644
        "memory/discardable_memory.cc",
        "memory/discardable_memory.h",
        "memory/discardable_memory_allocator.cc",
-@@ -2515,46 +2509,6 @@ component("base") {
+@@ -2544,63 +2538,6 @@ component("base") {
    }
  }
  
@@ -93,7 +93,6 @@ index 99b58f1bba..408bb8c0a0 100644
 -rust_static_library("rust_logger") {
 -  allow_unsafe = true  # Unsafe needed for FFI.
 -  deps = [
--    ":debugging_buildflags",
 -    ":logging_log_severity_bindgen",
 -    ":tracing_buildflags",
 -    "//build:chromeos_buildflags",
@@ -110,6 +109,24 @@ index 99b58f1bba..408bb8c0a0 100644
 -    # TODO(collinbaker): determine how to handle these cxx bindings-induced
 -    # circular dependencies more robustly.
 -    "//base/allocator/partition_allocator:raw_ptr",
+-
+-    # Needed because logging/rust_logger.rs contains:
+-    #   include!("base/logging/rust_log_integration.h");
+-    # rust_log_integration.h ends up transitively #including
+-    # debug/debugging_buildflags.h, which is a generated header that needs to
+-    # be written first.
+-    #
+-    # Technically it would be more correct to depend on :base, which is the
+-    # target for rust_log_integration.h, but that's not possible due to circular
+-    # dependencies.
+-    #
+-    # Note if this is removed the build may still work by accident because
+-    # debug/debugging_buildflags.h still ends up being generated through a
+-    # dependency chain via :logging_log_severity_bindgen. But we should not
+-    # rely on that.
+-    #
+-    # See also https://crbug.com/406267472.
+-    ":debugging_buildflags",
 -  ]
 -  visibility = [ ":base" ]
 -  sources = [ "logging/rust_logger.rs" ]
@@ -121,7 +138,7 @@ index 99b58f1bba..408bb8c0a0 100644
  if (is_linux || is_chromeos) {
    # Split out as a separate target for two reasons:
    # - the line number reader is 2x slower in debug builds if not optimized,
-@@ -3370,7 +3324,6 @@ test("base_unittests") {
+@@ -3451,7 +3388,6 @@ test("base_unittests") {
      "json/string_escape_unittest.cc",
      "json/values_util_unittest.cc",
      "lazy_instance_unittest.cc",
@@ -130,10 +147,10 @@ index 99b58f1bba..408bb8c0a0 100644
      "macros/is_empty_unittest.cc",
      "memory/aligned_memory_unittest.cc",
 diff --git a/base/logging.cc b/base/logging.cc
-index 22aa478001..f7e2e7a17b 100644
+index b8eee13c99..984a94606b 100644
 --- a/base/logging.cc
 +++ b/base/logging.cc
-@@ -118,10 +118,6 @@ typedef FILE* FileHandle;
+@@ -117,10 +117,6 @@ typedef FILE* FileHandle;
  #include "base/fuchsia/scoped_fx_logger.h"
  #endif
  
@@ -144,7 +161,7 @@ index 22aa478001..f7e2e7a17b 100644
  namespace logging {
  
  namespace {
-@@ -538,11 +534,6 @@ bool BaseInitLoggingImpl(const LoggingSettings& settings) {
+@@ -529,11 +525,6 @@ bool BaseInitLoggingImpl(const LoggingSettings& settings) {
    }
  #endif
  
@@ -457,7 +474,7 @@ index 0ead11739b..0000000000
 -    log::set_max_level(LevelFilter::Trace);
 -}
 diff --git a/base/test/BUILD.gn b/base/test/BUILD.gn
-index 5beef03e5f..282354c538 100644
+index 5c286d8d8f..97a509acde 100644
 --- a/base/test/BUILD.gn
 +++ b/base/test/BUILD.gn
 @@ -6,7 +6,6 @@ import("//build/compiled_action.gni")
@@ -542,25 +559,29 @@ index dc8adc6b85..0000000000
 -    error!("test log with placeholder {}", i);
 -}
 diff --git a/third_party/rust/chromium_crates_io/gnrt_config.toml b/third_party/rust/chromium_crates_io/gnrt_config.toml
-index 84de45c336..121b4d1921 100644
+index a866f01ffc..711a57ab09 100644
 --- a/third_party/rust/chromium_crates_io/gnrt_config.toml
 +++ b/third_party/rust/chromium_crates_io/gnrt_config.toml
-@@ -207,6 +207,7 @@ ban_features = [
- license_files= ["LICENSE.txt"]
+@@ -389,8 +389,9 @@ allow_unsafe = false
+ [crate.llguidance.extra_kv]
+ allow_unsafe = true
  
- [crate.log]
+-[crate.log.extra_kv]
+-allow_unsafe = true
++[crate.log]
 +group = 'test'
++extra_kv = { allow_unsafe = true }
  
- [crate.miniz_oxide.extra_kv]
- # Web tests (aka WPT tests, also formerly known as Layout Tests) require fast
+ [crate.memchr.extra_kv]
+ allow_unsafe = true
 diff --git a/third_party/rust/log/v0_4/BUILD.gn b/third_party/rust/log/v0_4/BUILD.gn
-index f2f0679a8b..73c3a8acee 100644
+index 8d4d70ae54..a3d485dfb9 100644
 --- a/third_party/rust/log/v0_4/BUILD.gn
 +++ b/third_party/rust/log/v0_4/BUILD.gn
-@@ -47,4 +47,6 @@ cargo_crate("lib") {
-   rustflags = [
-     "--cap-lints=allow",  # Suppress all warnings in crates.io crates
-   ]
+@@ -70,4 +70,6 @@ cargo_crate("lib") {
+   executable_configs += _configs_to_add
+   proc_macro_configs -= _configs_to_remove
+   proc_macro_configs += _configs_to_add
 +
 +  testonly = true
  }
