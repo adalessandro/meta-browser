@@ -32,7 +32,13 @@ SRC_URI += "\
     file://0017-rust-Use-adler-instead-of-adler2.patch \
     file://0018-Revert-Remove-libavif-based-AVIF-decoder.patch \
     file://0019-Disable-crabbyavif-to-fix-build-errors.patch \
+    file://0020-Revert-Remove-third_party-libavif.patch \
+    git://chromium.googlesource.com/external/github.com/AOMediaCodec/libavif;protocol=https;branch=main;name=libavif;destsuffix=third_party/libavif/src \
 "
+
+SRCREV_FORMAT .= "_libavif"
+SRCREV_libavif = "e7b34a1f5e9f7024d08311c7bae156061b889882"
+
 # ARM/AArch64-specific patches.
 SRC_URI:append:aarch64 = "${@bb.utils.contains('TUNE_FEATURES', 'crypto', '', ' file://arm/0001-Fix-AES-crypto-SIGILL-on-rpi4-64.patch', d)}"
 
