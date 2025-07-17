@@ -28,7 +28,6 @@ SRC_URI += "\
     file://0012-Revert-Allow-and-use-std-hardware_destructive_interf.patch \
     file://0013-Revert-Set-Rust-symbol-visibility-to-hidden-when-C-s.patch \
     file://0014-pdfium-Fix-missing-PDFiumAPIStringBufferAdapter-temp.patch \
-    file://0015-Revert-Connect-the-Rust-log-crate-to-the-base-loggin.patch \
     file://0016-third_party-node-update_node_binaries-Update-nodejs-.patch \
     file://0017-rust-Use-adler-instead-of-adler2.patch \
     file://0018-Revert-Remove-libavif-based-AVIF-decoder.patch \
