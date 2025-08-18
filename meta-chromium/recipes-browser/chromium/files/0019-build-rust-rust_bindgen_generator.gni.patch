@@ -1,0 +1,40 @@
+From 60971c0c57c5d66f2da342a54851aa3e5fb79828 Mon Sep 17 00:00:00 2001
+From: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+Date: Mon, 18 Aug 2025 09:37:49 -0300
+Subject: [PATCH] build: /rust/rust_bindgen_generator.gni:
+
+* with chromium 138 it became a blocker because upstream generalized dependency
+on //build/rust/allocator to most crates.
+
+* The issue originates with a wrong -resource-dir parameter passed to bindgen:
+eg. on walnascar we have clang 20.1.2, include files are located in
+recipe-sysroot-native/usr/lib/clang/20 while the libraries are in
+recipe-sysroot-native/usr/lib/clang/20.1.2
+
+* //build/rust/bindgen_generator.gni uses clang_version to set clang_resource_dir:
+
+* workaround was removed: fixes a build error that's most likely because the way
+upstream configures bindgen makes it incompatible with our cross-architecture
+builds.
+
+Upstream-Status: Inappropriate [specific to our build setup]
+Signed-off-by: Ariel D'Alessandro <ariel.dalessandro@collabora.com>
+---
+ build/rust/rust_bindgen_generator.gni | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/build/rust/rust_bindgen_generator.gni b/build/rust/rust_bindgen_generator.gni
+index c91916be93..a86efd3291 100644
+--- a/build/rust/rust_bindgen_generator.gni
++++ b/build/rust/rust_bindgen_generator.gni
+@@ -215,8 +215,9 @@ template("rust_bindgen_generator") {
+     # says the wrong thing. We point it to our clang's resource dir which will
+     # make it behave consistently with our other command line flags and allows
+     # system headers to be found.
++    clang_split_version = string_split(clang_version, ".")
+     clang_resource_dir =
+-        rebase_path(clang_base_path + "/lib/clang/" + clang_version,
++        rebase_path(clang_base_path + "/lib/clang/" + clang_split_version[0],
+                     root_build_dir)
+     args += [
+       "-resource-dir",
